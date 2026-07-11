@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "ZSAGql/AjEc=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\KALIUNAI_PC\\Desktop\\CodexUsageMonitor\\CodexUsageMonitor.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\KALIUNAI_PC\\.nuget\\packages\\costura.fody\\6.0.0\\costura.fody.6.0.0.nupkg.sha512",
+    "C:\\Users\\KALIUNAI_PC\\.nuget\\packages\\fody\\6.8.2\\fody.6.8.2.nupkg.sha512",
+    "C:\\Users\\KALIUNAI_PC\\.nuget\\packages\\newtonsoft.json\\13.0.3\\newtonsoft.json.13.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}
