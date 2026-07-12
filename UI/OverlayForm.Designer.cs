@@ -30,6 +30,7 @@ namespace CodexUsageMonitor.UI
             this._contextMenu = new System.Windows.Forms.ContextMenuStrip(this.components);
             this._miRefresh = new System.Windows.Forms.ToolStripMenuItem();
             this._miClickThrough = new System.Windows.Forms.ToolStripMenuItem();
+            this._miAutoStart = new System.Windows.Forms.ToolStripMenuItem();
             this._miOpacityHost = new System.Windows.Forms.ToolStripControlHost(this._opacityTrack = new System.Windows.Forms.TrackBar());
             this._miOpenWeb = new System.Windows.Forms.ToolStripMenuItem();
             this._miExit = new System.Windows.Forms.ToolStripMenuItem();
@@ -64,11 +65,12 @@ namespace CodexUsageMonitor.UI
             this._contextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
                 this._miRefresh,
                 this._miClickThrough,
+                this._miAutoStart,
                 this._miOpacityHost,
                 this._miOpenWeb,
                 this._miExit});
             this._contextMenu.Name = "_contextMenu";
-            this._contextMenu.Size = new System.Drawing.Size(220, 138);
+            this._contextMenu.Size = new System.Drawing.Size(220, 160);
             this._contextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.ContextMenu_Opening);
             //
             // _miRefresh
@@ -84,6 +86,13 @@ namespace CodexUsageMonitor.UI
             this._miClickThrough.Size = new System.Drawing.Size(219, 22);
             this._miClickThrough.Text = "Click-through (Ctrl+Alt+T)";
             this._miClickThrough.Click += new System.EventHandler(this.MiClickThrough_Click);
+            //
+            // _miAutoStart
+            //
+            this._miAutoStart.Name = "_miAutoStart";
+            this._miAutoStart.Size = new System.Drawing.Size(219, 22);
+            this._miAutoStart.Text = "Auto run after startup";
+            this._miAutoStart.Click += new System.EventHandler(this.MiAutoStart_Click);
             //
             // _miOpacityHost
             //
@@ -110,7 +119,7 @@ namespace CodexUsageMonitor.UI
             this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.BackColor = System.Drawing.Color.Magenta;
-            this.ClientSize = new System.Drawing.Size(340, 150);
+            this.ClientSize = new System.Drawing.Size(380, 136);
             this.ContextMenuStrip = this._contextMenu;
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None;
             this.KeyPreview = true;
@@ -138,6 +147,7 @@ namespace CodexUsageMonitor.UI
         private System.Windows.Forms.ContextMenuStrip _contextMenu;
         private System.Windows.Forms.ToolStripMenuItem _miRefresh;
         private System.Windows.Forms.ToolStripMenuItem _miClickThrough;
+        private System.Windows.Forms.ToolStripMenuItem _miAutoStart;
         private System.Windows.Forms.ToolStripControlHost _miOpacityHost;
         private System.Windows.Forms.TrackBar _opacityTrack;
         private System.Windows.Forms.ToolStripMenuItem _miOpenWeb;

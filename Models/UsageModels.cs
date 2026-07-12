@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace CodexUsageMonitor.Models
 {
@@ -28,6 +30,9 @@ namespace CodexUsageMonitor.Models
 
         [JsonProperty("secondary_window")]
         public UsageWindow SecondaryWindow { get; set; }
+
+        [JsonExtensionData]
+        public IDictionary<string, JToken> ExtraFields { get; set; }
     }
 
     public sealed class UsageWindow
@@ -53,10 +58,17 @@ namespace CodexUsageMonitor.Models
         public bool LimitReached { get; set; }
         public UsageWindow Primary { get; set; }
         public UsageWindow Secondary { get; set; }
+        public List<UsageLimitWindow> Windows { get; set; } = new List<UsageLimitWindow>();
         public DateTime FetchedAtUtc { get; set; }
         public string Error { get; set; }
 
-        public bool HasData => Primary != null || Secondary != null;
+        public bool HasData => Windows.Count > 0 || Primary != null || Secondary != null;
+    }
+
+    public sealed class UsageLimitWindow
+    {
+        public string Key { get; set; }
+        public UsageWindow Window { get; set; }
     }
 
     public sealed class CodexAuth

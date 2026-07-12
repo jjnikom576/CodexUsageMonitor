@@ -16,10 +16,18 @@ namespace CodexUsageMonitor.UI
     {
         private const string AnalyticsUrl = "https://chatgpt.com/codex/cloud/settings/analytics";
         private const string RegistryKey = @"Software\CodexUsageMonitor";
+        private const string StartupRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string StartupRunValueName = "CodexUsageMonitor";
         private const double MinOpacity = 0.35;
         private const double MaxOpacity = 1.0;
         private const double OpacityStep = 0.05;
         private const int FixedMargin = 24;
+        private const int MinVisibleWidth = 80;
+        private const int MinVisibleHeight = 40;
+        private const int MeterTop = 48;
+        private const int MeterSpacing = 52;
+        private const int LayoutBaseHeight = 80;
+        private const int MinClientHeight = 136;
         private const string ToggleClickableHotkeyText = "Ctrl+Alt+T: make clickable";
         private const string TogglePassthroughHotkeyText = "Ctrl+Alt+T: make click-through";
 
@@ -81,6 +89,7 @@ namespace CodexUsageMonitor.UI
             EnsureVisibleOrPlaceDefault();
             SyncOpacityTrack();
             UpdateClickThroughMenu();
+            UpdateAutoStartMenu();
             _refreshTimer.Start();
             _clockTimer.Start();
             _hoverTimer.Start();
@@ -231,7 +240,10 @@ namespace CodexUsageMonitor.UI
                 BeginInvoke((MethodInvoker)(() =>
                 {
                     if (!_dragging && !IsDisposed)
+                    {
+                        ApplySnapshotLayout(snapshot);
                         Invalidate();
+                    }
                 }));
             }
             catch
@@ -251,8 +263,11 @@ namespace CodexUsageMonitor.UI
                 return;
 
             using (var path = RoundedRect(new Rectangle(0, 0, bounds.Width - 1, bounds.Height - 1), 12))
-            using (var fill = new SolidBrush(Color.FromArgb(210, 18, 20, 26)))
-            using (var border = new Pen(Color.FromArgb(120, 90, 110, 140), 1f))
+            using (var fill = new LinearGradientBrush(bounds,
+                Color.FromArgb(238, 16, 19, 24),
+                Color.FromArgb(238, 28, 32, 38),
+                LinearGradientMode.ForwardDiagonal))
+            using (var border = new Pen(Color.FromArgb(145, 92, 112, 132), 1f))
             {
                 g.FillPath(fill, path);
                 g.DrawPath(border, path);
@@ -265,45 +280,39 @@ namespace CodexUsageMonitor.UI
             var titleFont = new Font("Segoe UI Semibold", 10f, FontStyle.Bold);
             var labelFont = new Font("Segoe UI", 8.5f, FontStyle.Regular);
             var valueFont = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold);
+            var percentFont = new Font("Segoe UI Semibold", 13f, FontStyle.Bold);
             var smallFont = new Font("Segoe UI", 7.5f, FontStyle.Regular);
 
             try
             {
-                var title = "Codex Usage";
-                var plan = string.IsNullOrWhiteSpace(snap.PlanType) ? "-" : snap.PlanType.ToUpperInvariant();
-                g.DrawString(title, titleFont, Brushes.White, 14, 10);
-                g.DrawString(plan, smallFont, new SolidBrush(Color.FromArgb(180, 170, 190, 220)), bounds.Width - 70, 12);
-
-                var mode = _clickThrough ? "PASSTHR" : "CLICK";
-                var modeColor = _clickThrough
-                    ? Color.FromArgb(255, 255, 190, 90)
-                    : Color.FromArgb(255, 120, 200, 255);
-                g.DrawString(mode, smallFont, new SolidBrush(modeColor), 14, 26);
+                DrawHeader(g, snap, titleFont, smallFont, bounds);
 
                 if (!string.IsNullOrWhiteSpace(snap.Error))
                 {
-                    g.DrawString(snap.Error, labelFont, new SolidBrush(Color.FromArgb(255, 255, 120, 120)), 14, 44);
+                    DrawMessage(g, labelFont, snap.Error);
                     DrawFooter(g, snap, smallFont);
                     return;
                 }
 
                 if (!snap.HasData)
                 {
-                    g.DrawString("Loading...", labelFont, Brushes.Gainsboro, 14, 44);
+                    DrawMessage(g, labelFont, "Loading usage...");
                     DrawFooter(g, snap, smallFont);
                     return;
                 }
 
-                var status = snap.LimitReached ? "LIMIT REACHED" : (snap.Allowed ? "OK" : "BLOCKED");
-                var statusColor = snap.LimitReached
-                    ? Color.FromArgb(255, 255, 90, 90)
-                    : Color.FromArgb(255, 90, 220, 140);
-                g.DrawString(status, valueFont, new SolidBrush(statusColor), bounds.Width - 110, 10);
+                DrawStatusBadge(g, valueFont, smallFont, bounds, snap);
+                var windows = GetUsageWindows(snap);
+                for (var i = 0; i < windows.Count; i++)
+                {
+                    var item = windows[i];
 
-                DrawUsageBar(g, labelFont, valueFont, 14, 42, "5h window",
-                    snap.Primary, Color.FromArgb(255, 64, 156, 255));
-                DrawUsageBar(g, labelFont, valueFont, 14, 82, "7d window",
-                    snap.Secondary, Color.FromArgb(255, 120, 90, 255));
+                    DrawHudMeter(g, labelFont, valueFont, percentFont, smallFont, 14, MeterTop + (i * MeterSpacing), bounds.Width - 28,
+                        FormatUsageTitle(item.Window),
+                        FormatPeriodBadge(item.Window),
+                        FormatWindowLabel(item.Window),
+                        item.Window);
+                }
 
                 DrawFooter(g, snap, smallFont);
             }
@@ -312,57 +321,299 @@ namespace CodexUsageMonitor.UI
                 titleFont.Dispose();
                 labelFont.Dispose();
                 valueFont.Dispose();
+                percentFont.Dispose();
                 smallFont.Dispose();
+            }
+        }
+
+        private void ApplySnapshotLayout(UsageSnapshot snap)
+        {
+            var windowCount = Math.Max(1, GetUsageWindows(snap).Count);
+            var targetHeight = Math.Max(MinClientHeight, LayoutBaseHeight + (windowCount * MeterSpacing));
+            if (ClientSize.Height != targetHeight)
+                ClientSize = new Size(ClientSize.Width, targetHeight);
+        }
+
+        private static System.Collections.Generic.List<UsageLimitWindow> GetUsageWindows(UsageSnapshot snap)
+        {
+            var windows = new System.Collections.Generic.List<UsageLimitWindow>();
+            if (snap == null)
+                return windows;
+
+            if (snap.Windows != null && snap.Windows.Count > 0)
+            {
+                windows.AddRange(snap.Windows);
+                SortUsageWindows(windows);
+                return windows;
+            }
+
+            AddFallbackUsageWindow(windows, "primary_window", snap.Primary);
+            AddFallbackUsageWindow(windows, "secondary_window", snap.Secondary);
+            SortUsageWindows(windows);
+            return windows;
+        }
+
+        private static void SortUsageWindows(System.Collections.Generic.List<UsageLimitWindow> windows)
+        {
+            windows.Sort((left, right) =>
+            {
+                var usedCompare = right.Window.UsedPercent.CompareTo(left.Window.UsedPercent);
+                if (usedCompare != 0)
+                    return usedCompare;
+
+                return left.Window.LimitWindowSeconds.CompareTo(right.Window.LimitWindowSeconds);
+            });
+        }
+
+        private static void AddFallbackUsageWindow(
+            System.Collections.Generic.List<UsageLimitWindow> windows,
+            string key,
+            UsageWindow window)
+        {
+            if (window == null || window.LimitWindowSeconds <= 0)
+                return;
+
+            windows.Add(new UsageLimitWindow
+            {
+                Key = key,
+                Window = window
+            });
+        }
+
+        private static string FormatWindowLabel(UsageWindow window)
+        {
+            if (window == null || window.LimitWindowSeconds <= 0)
+                return "no data";
+
+            var seconds = window.LimitWindowSeconds;
+            if (seconds % (24 * 60 * 60) == 0)
+                return (seconds / (24 * 60 * 60)) + "d";
+            if (seconds % (60 * 60) == 0)
+                return (seconds / (60 * 60)) + "h";
+            if (seconds % 60 == 0)
+                return (seconds / 60) + "m";
+
+            return seconds + "s";
+        }
+
+        private static string FormatUsageTitle(UsageWindow window)
+        {
+            if (window == null || window.LimitWindowSeconds <= 0)
+                return "Usage";
+
+            var seconds = window.LimitWindowSeconds;
+            if (seconds == 24 * 60 * 60)
+                return "Daily";
+            if (seconds >= 6 * 24 * 60 * 60 && seconds <= 8 * 24 * 60 * 60)
+                return "Weekly";
+
+            return FormatWindowLabel(window);
+        }
+
+        private static string FormatPeriodBadge(UsageWindow window)
+        {
+            if (window == null || window.LimitWindowSeconds <= 0)
+                return "LIVE";
+
+            var seconds = window.LimitWindowSeconds;
+            if (seconds == 24 * 60 * 60)
+                return "DAY";
+            if (seconds >= 6 * 24 * 60 * 60 && seconds <= 8 * 24 * 60 * 60)
+                return "WEEKLY";
+
+            return FormatWindowLabel(window).ToUpperInvariant();
+        }
+
+        private void DrawHeader(Graphics g, UsageSnapshot snap, Font titleFont, Font smallFont, Rectangle bounds)
+        {
+            using (var titleBrush = new SolidBrush(Color.White))
+            using (var subBrush = new SolidBrush(Color.FromArgb(185, 176, 190, 204)))
+            {
+                g.DrawString("Codex Usage", titleFont, titleBrush, 14, 10);
+
+                var plan = string.IsNullOrWhiteSpace(snap.PlanType) ? "-" : snap.PlanType.ToUpperInvariant();
+                DrawTrimmedText(g, plan, smallFont, subBrush, new Rectangle(bounds.Width - 104, 12, 90, 14), StringAlignment.Far);
+            }
+
+            var mode = _clickThrough ? "VIEW" : "EDIT";
+            var modeColor = _clickThrough
+                ? Color.FromArgb(255, 100, 210, 186)
+                : Color.FromArgb(255, 104, 176, 255);
+            using (var modeBrush = new SolidBrush(modeColor))
+                g.DrawString(mode, smallFont, modeBrush, 14, 27);
+        }
+
+        private void DrawMessage(Graphics g, Font font, string text)
+        {
+            using (var brush = new SolidBrush(Color.FromArgb(235, 255, 178, 190)))
+                DrawTrimmedText(g, text, font, brush, new Rectangle(16, 62, ClientSize.Width - 32, 36), StringAlignment.Near);
+        }
+
+        private static void DrawStatusBadge(Graphics g, Font valueFont, Font smallFont, Rectangle bounds, UsageSnapshot snap)
+        {
+            var text = snap.LimitReached ? "LIMIT" : (snap.Allowed ? "READY" : "BLOCKED");
+            var color = snap.LimitReached
+                ? Color.FromArgb(255, 255, 91, 91)
+                : (snap.Allowed ? Color.FromArgb(255, 101, 231, 145) : Color.FromArgb(255, 255, 174, 76));
+
+            var badge = new Rectangle(bounds.Width - 84, 25, 70, 16);
+            using (var path = RoundedRect(badge, 8))
+            using (var fill = new SolidBrush(Color.FromArgb(54, color)))
+            using (var outline = new Pen(Color.FromArgb(160, color), 1f))
+            using (var brush = new SolidBrush(color))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(outline, path);
+                DrawTrimmedText(g, text, smallFont, brush, badge, StringAlignment.Center);
+            }
+        }
+
+        private static void DrawHudMeter(
+            Graphics g,
+            Font labelFont,
+            Font valueFont,
+            Font percentFont,
+            Font smallFont,
+            int x,
+            int y,
+            int width,
+            string title,
+            string periodLabel,
+            string windowLabel,
+            UsageWindow window)
+        {
+            var hasData = window != null;
+            var used = hasData ? GetUsedPercent(window) : 0;
+            var accent = GetUsageColor(used, hasData);
+            var accentEnd = ShiftColor(accent, 28);
+            var barRect = new Rectangle(x, y + 29, width, 12);
+            var percentText = hasData ? used.ToString("0.#") + "%" : "--";
+            var percentRect = new Rectangle(x + width - 74, y - 2, 74, 24);
+
+            using (var labelBrush = new SolidBrush(Color.FromArgb(230, 238, 242, 250)))
+            using (var smallBrush = new SolidBrush(Color.FromArgb(166, 178, 190, 204)))
+            using (var valueBrush = new SolidBrush(Color.White))
+            {
+                DrawTrimmedText(g, title, valueFont, labelBrush, new Rectangle(x, y, 84, 18), StringAlignment.Near);
+                var pillWidth = Math.Max(34, Math.Min(70, (periodLabel.Length * 7) + 12));
+                var pillX = x + 88;
+                DrawMiniPill(g, smallFont, periodLabel, pillX, y + 1, pillWidth,
+                    Color.FromArgb(hasData ? 55 : 34, accent), Color.FromArgb(hasData ? 150 : 90, accent));
+                g.DrawString(windowLabel + " window", smallFont, smallBrush, pillX + pillWidth + 8, y + 2);
+                DrawTrimmedText(g, percentText, percentFont, valueBrush, percentRect, StringAlignment.Far);
+            }
+
+            using (var usedBrush = new SolidBrush(Color.FromArgb(150, 184, 194, 206)))
+                DrawTrimmedText(g, "used", smallFont, usedBrush, new Rectangle(x + width - 44, y + 22, 44, 12), StringAlignment.Far);
+
+            using (var trackPath = RoundedRect(barRect, 6))
+            using (var track = new SolidBrush(Color.FromArgb(170, 38, 43, 50)))
+            using (var frame = new Pen(Color.FromArgb(80, 220, 230, 240), 1f))
+            {
+                g.FillPath(track, trackPath);
+
+                var fillWidth = (int)Math.Round(barRect.Width * (used / 100.0));
+                if (fillWidth > 0)
+                {
+                    var fillRect = new Rectangle(barRect.X, barRect.Y, Math.Max(3, fillWidth), barRect.Height);
+                    using (var fillPath = RoundedRect(fillRect, 6))
+                    using (var fill = new LinearGradientBrush(fillRect, accent, accentEnd, LinearGradientMode.Horizontal))
+                    {
+                        g.FillPath(fill, fillPath);
+                    }
+                }
+
+                for (var i = 1; i < 5; i++)
+                {
+                    var tickX = barRect.X + (barRect.Width * i / 5);
+                    using (var tick = new Pen(Color.FromArgb(60, 255, 255, 255), 1f))
+                        g.DrawLine(tick, tickX, barRect.Y + 3, tickX, barRect.Bottom - 3);
+                }
+
+                g.DrawPath(frame, trackPath);
+            }
+        }
+
+        private static void DrawMiniPill(Graphics g, Font font, string text, int x, int y, int width, Color fillColor, Color borderColor)
+        {
+            var rect = new Rectangle(x, y, width, 14);
+            using (var path = RoundedRect(rect, 7))
+            using (var fill = new SolidBrush(fillColor))
+            using (var border = new Pen(borderColor, 1f))
+            using (var brush = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(border, path);
+                DrawTrimmedText(g, text, font, brush, rect, StringAlignment.Center);
             }
         }
 
         private void DrawFooter(Graphics g, UsageSnapshot snap, Font smallFont)
         {
             var local = snap.FetchedAtUtc.ToLocalTime();
-            var text = string.Format("{0}% | {1} | Updated {2}",
+            var text = string.Format("Opacity {0}% | Ctrl+Alt+T | {1}",
                 (int)Math.Round(Opacity * 100),
-                _clickThrough ? ToggleClickableHotkeyText : TogglePassthroughHotkeyText,
                 local.ToString("HH:mm:ss"));
 
-            if (snap.HasData && snap.Primary != null)
-                text += " | 5h reset " + FormatCountdown(snap.Primary.ResetAfterSeconds);
-
-            g.DrawString(text, smallFont, new SolidBrush(Color.FromArgb(170, 170, 180, 200)), 14, ClientSize.Height - 22);
-        }
-
-        private static void DrawUsageBar(Graphics g, Font labelFont, Font valueFont, int x, int y, string label, UsageWindow window, Color barColor)
-        {
-            var percent = window?.UsedPercent ?? 0;
-            if (percent < 0) percent = 0;
-            if (percent > 100) percent = 100;
-
-            g.DrawString(label, labelFont, Brushes.Gainsboro, x, y);
-            var pctText = percent.ToString("0.#") + "%";
-            var pctSize = g.MeasureString(pctText, valueFont);
-            g.DrawString(pctText, valueFont, Brushes.White, 310 - pctSize.Width, y);
-
-            var barRect = new Rectangle(x, y + 18, 296, 10);
-            using (var track = new SolidBrush(Color.FromArgb(90, 40, 45, 58)))
-                g.FillRectangle(track, barRect);
-
-            var fillWidth = (int)Math.Round(barRect.Width * (percent / 100.0));
-            if (fillWidth > 0)
+            if (snap.HasData)
             {
-                var fillRect = new Rectangle(barRect.X, barRect.Y, fillWidth, barRect.Height);
-                using (var brush = new LinearGradientBrush(fillRect, barColor, ShiftColor(barColor, 40), LinearGradientMode.Horizontal))
-                    g.FillRectangle(brush, fillRect);
+                var windows = GetUsageWindows(snap);
+                for (var i = 0; i < windows.Count; i++)
+                {
+                    var window = windows[i].Window;
+                    text += " | " + FormatWindowLabel(window) + " " + FormatCountdown(window.ResetAfterSeconds);
+                }
             }
 
-            using (var frame = new Pen(Color.FromArgb(80, 255, 255, 255)))
-                g.DrawRectangle(frame, barRect);
+            using (var brush = new SolidBrush(Color.FromArgb(170, 184, 194, 214)))
+                DrawTrimmedText(g, text, smallFont, brush, new Rectangle(14, ClientSize.Height - 22, ClientSize.Width - 28, 14), StringAlignment.Near);
         }
 
-        private static Color ShiftColor(Color c, int delta)
+        private static double ClampPercent(double value)
         {
-            return Color.FromArgb(c.A,
-                Math.Min(255, c.R + delta),
-                Math.Min(255, c.G + delta),
-                Math.Min(255, c.B + delta));
+            if (value < 0) return 0;
+            if (value > 100) return 100;
+            return value;
+        }
+
+        private static double GetUsedPercent(UsageWindow window)
+        {
+            if (window == null)
+                return 0;
+
+            return ClampPercent(window.UsedPercent);
+        }
+
+        private static Color GetUsageColor(double usedPercent, bool hasData)
+        {
+            if (!hasData)
+                return Color.FromArgb(255, 96, 105, 118);
+            if (usedPercent >= 90)
+                return Color.FromArgb(255, 244, 92, 92);
+            if (usedPercent >= 70)
+                return Color.FromArgb(255, 245, 172, 74);
+
+            return Color.FromArgb(255, 80, 204, 176);
+        }
+
+        private static Color ShiftColor(Color color, int delta)
+        {
+            return Color.FromArgb(color.A,
+                Math.Max(0, Math.Min(255, color.R + delta)),
+                Math.Max(0, Math.Min(255, color.G + delta)),
+                Math.Max(0, Math.Min(255, color.B + delta)));
+        }
+
+        private static void DrawTrimmedText(Graphics g, string text, Font font, Brush brush, Rectangle bounds, StringAlignment alignment)
+        {
+            using (var format = new StringFormat())
+            {
+                format.Alignment = alignment;
+                format.LineAlignment = StringAlignment.Center;
+                format.Trimming = StringTrimming.EllipsisCharacter;
+                format.FormatFlags = StringFormatFlags.NoWrap;
+                g.DrawString(text, font, brush, bounds, format);
+            }
         }
 
         private static string FormatCountdown(long seconds)
@@ -371,16 +622,28 @@ namespace CodexUsageMonitor.UI
                 return "now";
 
             var ts = TimeSpan.FromSeconds(seconds);
+            if (ts.TotalDays >= 1)
+                return string.Format("{0}d | {1:00}h | {2:00}m", (int)ts.TotalDays, ts.Hours, ts.Minutes);
             if (ts.TotalHours >= 1)
-                return string.Format("{0}h {1}m", (int)ts.TotalHours, ts.Minutes);
+                return string.Format("{0:00}h | {1:00}m", (int)ts.TotalHours, ts.Minutes);
             if (ts.TotalMinutes >= 1)
-                return string.Format("{0}m {1}s", ts.Minutes, ts.Seconds);
+                return string.Format("{0:00}m | {1:00}s", ts.Minutes, ts.Seconds);
             return ts.Seconds + "s";
         }
 
         private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
         {
             var path = new GraphicsPath();
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+                return path;
+
+            radius = Math.Max(0, Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2));
+            if (radius == 0)
+            {
+                path.AddRectangle(bounds);
+                return path;
+            }
+
             var d = radius * 2;
             path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
             path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
@@ -442,6 +705,8 @@ namespace CodexUsageMonitor.UI
 
         private void MiClickThrough_Click(object sender, EventArgs e) => ToggleClickThrough();
 
+        private void MiAutoStart_Click(object sender, EventArgs e) => ToggleAutoStart();
+
         private void MiOpenWeb_Click(object sender, EventArgs e) => OpenAnalyticsPage();
 
         private void MiExit_Click(object sender, EventArgs e) => Close();
@@ -456,7 +721,10 @@ namespace CodexUsageMonitor.UI
             if (_clickThrough)
                 e.Cancel = true;
             else
+            {
                 SyncOpacityTrack();
+                UpdateAutoStartMenu();
+            }
         }
 
         private void ToggleClickThrough()
@@ -497,6 +765,89 @@ namespace CodexUsageMonitor.UI
             _miClickThrough.Text = _clickThrough
                 ? "Click-through ON (Ctrl+Alt+T)"
                 : "Click-through OFF (Ctrl+Alt+T)";
+        }
+
+        private void ToggleAutoStart()
+        {
+            var enabled = IsAutoStartEnabled();
+
+            try
+            {
+                SetAutoStart(!enabled);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    "Unable to update startup setting.\r\n\r\n" + ex.Message,
+                    "Codex Usage",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+
+            UpdateAutoStartMenu();
+        }
+
+        private void UpdateAutoStartMenu()
+        {
+            var enabled = IsAutoStartEnabled();
+            _miAutoStart.Checked = enabled;
+            _miAutoStart.Text = enabled
+                ? "Auto run after startup ON"
+                : "Auto run after startup OFF";
+        }
+
+        private static bool IsAutoStartEnabled()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(StartupRunKey, writable: false))
+                {
+                    var command = key?.GetValue(StartupRunValueName) as string;
+                    if (string.IsNullOrWhiteSpace(command))
+                        return false;
+
+                    var startupPath = ExtractExecutablePath(command);
+                    return string.Equals(startupPath, Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void SetAutoStart(bool enabled)
+        {
+            using (var key = Registry.CurrentUser.CreateSubKey(StartupRunKey))
+            {
+                if (key == null)
+                    throw new InvalidOperationException("Could not open the Windows startup registry key.");
+
+                if (enabled)
+                    key.SetValue(StartupRunValueName, "\"" + Application.ExecutablePath + "\"");
+                else
+                    key.DeleteValue(StartupRunValueName, throwOnMissingValue: false);
+            }
+        }
+
+        private static string ExtractExecutablePath(string command)
+        {
+            command = (command ?? string.Empty).Trim();
+            if (command.Length == 0)
+                return string.Empty;
+
+            if (command[0] == '"')
+            {
+                var endQuote = command.IndexOf('"', 1);
+                return endQuote > 1 ? command.Substring(1, endQuote - 1) : command.Trim('"');
+            }
+
+            var exeIndex = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            if (exeIndex >= 0)
+                return command.Substring(0, exeIndex + 4);
+
+            var firstSpace = command.IndexOf(' ');
+            return firstSpace >= 0 ? command.Substring(0, firstSpace) : command;
         }
 
         private void AdjustOpacity(double delta)
@@ -569,7 +920,7 @@ namespace CodexUsageMonitor.UI
 
         private void EnsureVisibleOrPlaceDefault()
         {
-            if (_loadedSavedLocation && IsOnAnyWorkingArea(Bounds))
+            if (_loadedSavedLocation && HasUsableVisibleArea(Bounds))
                 return;
 
             PlaceDefault();
@@ -584,11 +935,16 @@ namespace CodexUsageMonitor.UI
                 Location = target;
         }
 
-        private static bool IsOnAnyWorkingArea(Rectangle bounds)
+        private static bool HasUsableVisibleArea(Rectangle bounds)
         {
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+                return false;
+
             foreach (var screen in Screen.AllScreens)
             {
-                if (screen.WorkingArea.IntersectsWith(bounds))
+                var visible = Rectangle.Intersect(screen.WorkingArea, bounds);
+                if (visible.Width >= Math.Min(MinVisibleWidth, bounds.Width) &&
+                    visible.Height >= Math.Min(MinVisibleHeight, bounds.Height))
                     return true;
             }
 
@@ -637,8 +993,11 @@ namespace CodexUsageMonitor.UI
                 {
                     key.SetValue("Opacity", Opacity);
                     key.SetValue("ClickThrough", _clickThrough ? 1 : 0);
-                    key.SetValue("X", Location.X);
-                    key.SetValue("Y", Location.Y);
+                    if (HasUsableVisibleArea(Bounds))
+                    {
+                        key.SetValue("X", Location.X);
+                        key.SetValue("Y", Location.Y);
+                    }
                 }
             }
             catch
