@@ -19,18 +19,28 @@ namespace CodexUsageMonitor.UI
         private const double MinOpacity = 0.35;
         private const double MaxOpacity = 1.0;
         private const double OpacityStep = 0.05;
+        private const int FixedMargin = 24;
+        private const string ToggleClickableHotkeyText = "Ctrl+Alt+T: make clickable";
+        private const string TogglePassthroughHotkeyText = "Ctrl+Alt+T: make click-through";
 
         private readonly AuthStore _authStore = new AuthStore();
         private readonly UsageApiClient _api = new UsageApiClient();
         private readonly object _dataLock = new object();
+        private readonly System.Windows.Forms.Timer _hoverTimer = new System.Windows.Forms.Timer();
+        private readonly ToolTip _hotkeyToolTip = new ToolTip();
 
         private UsageSnapshot _snapshot = new UsageSnapshot();
         private bool _refreshing;
-        private bool _dragging;
-        private bool _clickThrough;
+        private bool _clickThrough = true;
         private bool _hotkeysRegistered;
-        private Point _dragStart;
-        private Point _formStart;
+        private bool _hotkeyToolTipVisible;
+        private bool _dragging;
+        private bool _loadedSavedLocation;
+        private bool _refreshTimerWasEnabledBeforeDrag;
+        private bool _pendingRefreshAfterDrag;
+        private Point _dragStartCursor;
+        private Point _dragStartLocation;
+        private string _hotkeyToolTipText;
 
         public OverlayForm()
         {
@@ -38,6 +48,14 @@ namespace CodexUsageMonitor.UI
             SetStyle(ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.UserPaint, true);
+
+            _hoverTimer.Interval = 250;
+            _hoverTimer.Tick += HoverTimer_Tick;
+            _hotkeyToolTip.AutomaticDelay = 100;
+            _hotkeyToolTip.AutoPopDelay = 4000;
+            _hotkeyToolTip.InitialDelay = 100;
+            _hotkeyToolTip.ReshowDelay = 100;
+            _hotkeyToolTip.ShowAlways = true;
         }
 
         protected override CreateParams CreateParams
@@ -59,11 +77,14 @@ namespace CodexUsageMonitor.UI
 
         private void OverlayForm_Load(object sender, EventArgs e)
         {
-            LoadWindowPosition();
+            LoadWindowSettings();
+            EnsureVisibleOrPlaceDefault();
             SyncOpacityTrack();
             UpdateClickThroughMenu();
             _refreshTimer.Start();
             _clockTimer.Start();
+            _hoverTimer.Start();
+            SystemEvents.DisplaySettingsChanged += SystemEvents_DisplaySettingsChanged;
             BeginRefresh();
         }
 
@@ -115,12 +136,56 @@ namespace CodexUsageMonitor.UI
 
         private void ClockTimer_Tick(object sender, EventArgs e)
         {
+            if (_dragging)
+                return;
+
             if (_snapshot?.HasData == true || _clickThrough)
                 Invalidate();
         }
 
+        private void HoverTimer_Tick(object sender, EventArgs e)
+        {
+            if (!IsHandleCreated || WindowState == FormWindowState.Minimized || _dragging)
+                return;
+
+            var cursor = Cursor.Position;
+            if (!Bounds.Contains(cursor))
+            {
+                HideHotkeyToolTip();
+                return;
+            }
+
+            var text = _clickThrough ? ToggleClickableHotkeyText : TogglePassthroughHotkeyText;
+            if (_hotkeyToolTipVisible && _hotkeyToolTipText == text)
+                return;
+
+            var local = PointToClient(cursor);
+            local.Offset(12, 18);
+            _hotkeyToolTip.Show(text, this, local, 2500);
+            _hotkeyToolTipVisible = true;
+            _hotkeyToolTipText = text;
+        }
+
+        private void HideHotkeyToolTip()
+        {
+            if (!_hotkeyToolTipVisible)
+                return;
+
+            _hotkeyToolTip.Hide(this);
+            _hotkeyToolTipVisible = false;
+            _hotkeyToolTipText = null;
+        }
+
+        private void SystemEvents_DisplaySettingsChanged(object sender, EventArgs e) => EnsureVisibleOrPlaceDefault();
+
         private void BeginRefresh()
         {
+            if (_dragging)
+            {
+                _pendingRefreshAfterDrag = true;
+                return;
+            }
+
             if (_refreshing)
                 return;
 
@@ -163,7 +228,11 @@ namespace CodexUsageMonitor.UI
 
             try
             {
-                BeginInvoke((MethodInvoker)Invalidate);
+                BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (!_dragging && !IsDisposed)
+                        Invalidate();
+                }));
             }
             catch
             {
@@ -205,7 +274,7 @@ namespace CodexUsageMonitor.UI
                 g.DrawString(title, titleFont, Brushes.White, 14, 10);
                 g.DrawString(plan, smallFont, new SolidBrush(Color.FromArgb(180, 170, 190, 220)), bounds.Width - 70, 12);
 
-                var mode = _clickThrough ? "PASSTHR" : "MOVE";
+                var mode = _clickThrough ? "PASSTHR" : "CLICK";
                 var modeColor = _clickThrough
                     ? Color.FromArgb(255, 255, 190, 90)
                     : Color.FromArgb(255, 120, 200, 255);
@@ -252,7 +321,7 @@ namespace CodexUsageMonitor.UI
             var local = snap.FetchedAtUtc.ToLocalTime();
             var text = string.Format("{0}% | {1} | Updated {2}",
                 (int)Math.Round(Opacity * 100),
-                _clickThrough ? "wheel/hotkey only" : "drag to move",
+                _clickThrough ? ToggleClickableHotkeyText : TogglePassthroughHotkeyText,
                 local.ToString("HH:mm:ss"));
 
             if (snap.HasData && snap.Primary != null)
@@ -326,37 +395,31 @@ namespace CodexUsageMonitor.UI
             if (_clickThrough)
                 return;
 
-            if (e.Button == MouseButtons.Middle)
+            if (e.Button == MouseButtons.Left)
             {
-                ToggleClickThrough();
+                BeginDrag();
                 return;
             }
 
-            if (e.Button != MouseButtons.Left)
-                return;
-
-            _dragging = true;
-            _dragStart = e.Location;
-            _formStart = Location;
+            if (e.Button == MouseButtons.Middle)
+            {
+                ToggleClickThrough();
+            }
         }
 
         private void OverlayForm_MouseMove(object sender, MouseEventArgs e)
         {
-            if (_clickThrough || !_dragging)
+            if (!_dragging)
                 return;
 
-            var dx = e.X - _dragStart.X;
-            var dy = e.Y - _dragStart.Y;
-            Location = new Point(_formStart.X + dx, _formStart.Y + dy);
+            var delta = new Size(Cursor.Position.X - _dragStartCursor.X, Cursor.Position.Y - _dragStartCursor.Y);
+            Location = _dragStartLocation + delta;
         }
 
         private void OverlayForm_MouseUp(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left && _dragging)
-            {
-                _dragging = false;
-                SaveWindowSettings();
-            }
+            if (e.Button == MouseButtons.Left)
+                EndDrag();
         }
 
         private void OverlayForm_MouseWheel(object sender, MouseEventArgs e)
@@ -404,12 +467,11 @@ namespace CodexUsageMonitor.UI
         private void SetClickThrough(bool enabled, bool persist)
         {
             _clickThrough = enabled;
-            if (_dragging)
-                _dragging = false;
 
             ApplyClickThrough();
             UpdateClickThroughMenu();
             Invalidate();
+            HideHotkeyToolTip();
 
             if (persist)
                 SaveWindowSettings();
@@ -475,48 +537,96 @@ namespace CodexUsageMonitor.UI
             }
         }
 
-        private void LoadWindowPosition()
+        private void LoadWindowSettings()
         {
             try
             {
                 using (var key = Registry.CurrentUser.OpenSubKey(RegistryKey))
                 {
                     if (key == null)
-                    {
-                        PlaceDefault();
                         return;
-                    }
 
-                    var x = (int)(key.GetValue("X") ?? -1);
-                    var y = (int)(key.GetValue("Y") ?? -1);
                     var opacity = Convert.ToDouble(key.GetValue("Opacity") ?? 0.88);
-                    var clickThrough = Convert.ToInt32(key.GetValue("ClickThrough") ?? 0) == 1;
+                    var clickThrough = Convert.ToInt32(key.GetValue("ClickThrough") ?? 1) != 0;
+                    var xValue = key.GetValue("X");
+                    var yValue = key.GetValue("Y");
 
                     SetOpacity(opacity, persist: false);
-                    _clickThrough = clickThrough;
+                    SetClickThrough(clickThrough, persist: false);
 
-                    if (x < 0 || y < 0)
+                    if (xValue != null && yValue != null)
                     {
-                        PlaceDefault();
-                        return;
+                        Location = new Point(Convert.ToInt32(xValue), Convert.ToInt32(yValue));
+                        _loadedSavedLocation = true;
                     }
-
-                    var screen = Screen.FromPoint(new Point(x, y));
-                    x = Math.Max(screen.WorkingArea.Left, Math.Min(x, screen.WorkingArea.Right - Width));
-                    y = Math.Max(screen.WorkingArea.Top, Math.Min(y, screen.WorkingArea.Bottom - Height));
-                    Location = new Point(x, y);
                 }
             }
             catch
             {
-                PlaceDefault();
+                // keep defaults
             }
+        }
+
+        private void EnsureVisibleOrPlaceDefault()
+        {
+            if (_loadedSavedLocation && IsOnAnyWorkingArea(Bounds))
+                return;
+
+            PlaceDefault();
+            _loadedSavedLocation = true;
         }
 
         private void PlaceDefault()
         {
             var area = Screen.PrimaryScreen.WorkingArea;
-            Location = new Point(area.Right - Width - 24, area.Top + 24);
+            var target = new Point(area.Right - Width - FixedMargin, area.Top + FixedMargin);
+            if (Location != target)
+                Location = target;
+        }
+
+        private static bool IsOnAnyWorkingArea(Rectangle bounds)
+        {
+            foreach (var screen in Screen.AllScreens)
+            {
+                if (screen.WorkingArea.IntersectsWith(bounds))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void BeginDrag()
+        {
+            _dragging = true;
+            _pendingRefreshAfterDrag = false;
+            _dragStartCursor = Cursor.Position;
+            _dragStartLocation = Location;
+            _refreshTimerWasEnabledBeforeDrag = _refreshTimer.Enabled;
+            _refreshTimer.Stop();
+            HideHotkeyToolTip();
+            Capture = true;
+        }
+
+        private void EndDrag()
+        {
+            if (!_dragging)
+                return;
+
+            _dragging = false;
+            Capture = false;
+            EnsureVisibleOrPlaceDefault();
+            SaveWindowSettings();
+
+            if (_refreshTimerWasEnabledBeforeDrag)
+                _refreshTimer.Start();
+
+            if (_pendingRefreshAfterDrag)
+            {
+                _pendingRefreshAfterDrag = false;
+                BeginRefresh();
+            }
+
+            Invalidate();
         }
 
         private void SaveWindowSettings()
@@ -525,10 +635,10 @@ namespace CodexUsageMonitor.UI
             {
                 using (var key = Registry.CurrentUser.CreateSubKey(RegistryKey))
                 {
-                    key.SetValue("X", Location.X);
-                    key.SetValue("Y", Location.Y);
                     key.SetValue("Opacity", Opacity);
                     key.SetValue("ClickThrough", _clickThrough ? 1 : 0);
+                    key.SetValue("X", Location.X);
+                    key.SetValue("Y", Location.Y);
                 }
             }
             catch
@@ -539,6 +649,8 @@ namespace CodexUsageMonitor.UI
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            SystemEvents.DisplaySettingsChanged -= SystemEvents_DisplaySettingsChanged;
+            HideHotkeyToolTip();
             UnregisterHotKeys();
             SaveWindowSettings();
             base.OnFormClosing(e);

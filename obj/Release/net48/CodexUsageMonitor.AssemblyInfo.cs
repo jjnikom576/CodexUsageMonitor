@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CodexUsageMonitor")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3b659e3b7d3a0efe05e81c7cbb559bfc2104d615")]
 [assembly: System.Reflection.AssemblyProductAttribute("CodexUsageMonitor")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CodexUsageMonitor")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

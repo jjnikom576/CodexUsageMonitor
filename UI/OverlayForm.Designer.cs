@@ -13,6 +13,9 @@ namespace CodexUsageMonitor.UI
                 _refreshTimer?.Dispose();
                 _clockTimer?.Stop();
                 _clockTimer?.Dispose();
+                _hoverTimer?.Stop();
+                _hoverTimer?.Dispose();
+                _hotkeyToolTip?.Dispose();
                 _opacityTrack?.Dispose();
                 _api?.Dispose();
             }
