@@ -18,6 +18,7 @@ namespace CodexUsageMonitor.UI
                 _hotkeyToolTip?.Dispose();
                 _opacityTrack?.Dispose();
                 _api?.Dispose();
+                _cursorApi?.Dispose();
             }
             base.Dispose(disposing);
         }
@@ -33,6 +34,7 @@ namespace CodexUsageMonitor.UI
             this._miAutoStart = new System.Windows.Forms.ToolStripMenuItem();
             this._miOpacityHost = new System.Windows.Forms.ToolStripControlHost(this._opacityTrack = new System.Windows.Forms.TrackBar());
             this._miOpenWeb = new System.Windows.Forms.ToolStripMenuItem();
+            this._miOpenCursorWeb = new System.Windows.Forms.ToolStripMenuItem();
             this._miExit = new System.Windows.Forms.ToolStripMenuItem();
             ((System.ComponentModel.ISupportInitialize)(this._opacityTrack)).BeginInit();
             this._contextMenu.SuspendLayout();
@@ -68,9 +70,10 @@ namespace CodexUsageMonitor.UI
                 this._miAutoStart,
                 this._miOpacityHost,
                 this._miOpenWeb,
+                this._miOpenCursorWeb,
                 this._miExit});
             this._contextMenu.Name = "_contextMenu";
-            this._contextMenu.Size = new System.Drawing.Size(220, 160);
+            this._contextMenu.Size = new System.Drawing.Size(240, 182);
             this._contextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.ContextMenu_Opening);
             //
             // _miRefresh
@@ -103,15 +106,22 @@ namespace CodexUsageMonitor.UI
             // _miOpenWeb
             //
             this._miOpenWeb.Name = "_miOpenWeb";
-            this._miOpenWeb.Size = new System.Drawing.Size(219, 22);
-            this._miOpenWeb.Text = "Open analytics page";
+            this._miOpenWeb.Size = new System.Drawing.Size(239, 22);
+            this._miOpenWeb.Text = "Open Codex analytics";
             this._miOpenWeb.Click += new System.EventHandler(this.MiOpenWeb_Click);
+            //
+            // _miOpenCursorWeb
+            //
+            this._miOpenCursorWeb.Name = "_miOpenCursorWeb";
+            this._miOpenCursorWeb.Size = new System.Drawing.Size(239, 22);
+            this._miOpenCursorWeb.Text = "Open Cursor dashboard";
+            this._miOpenCursorWeb.Click += new System.EventHandler(this.MiOpenCursorWeb_Click);
             //
             // _miExit
             //
             this._miExit.Name = "_miExit";
             this._miExit.Size = new System.Drawing.Size(219, 22);
-            this._miExit.Text = "Exit";
+            this._miExit.Text = "Exit widget (Ctrl+Alt+Q)";
             this._miExit.Click += new System.EventHandler(this.MiExit_Click);
             //
             // OverlayForm
@@ -119,7 +129,7 @@ namespace CodexUsageMonitor.UI
             this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.BackColor = System.Drawing.Color.Magenta;
-            this.ClientSize = new System.Drawing.Size(380, 136);
+            this.ClientSize = new System.Drawing.Size(760, 136);
             this.ContextMenuStrip = this._contextMenu;
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None;
             this.KeyPreview = true;
@@ -127,7 +137,7 @@ namespace CodexUsageMonitor.UI
             this.Opacity = 0.88D;
             this.ShowInTaskbar = false;
             this.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
-            this.Text = "Codex Usage";
+            this.Text = "AI Usage Monitor";
             this.TopMost = true;
             this.TransparencyKey = System.Drawing.Color.Magenta;
             this.Load += new System.EventHandler(this.OverlayForm_Load);
@@ -151,6 +161,7 @@ namespace CodexUsageMonitor.UI
         private System.Windows.Forms.ToolStripControlHost _miOpacityHost;
         private System.Windows.Forms.TrackBar _opacityTrack;
         private System.Windows.Forms.ToolStripMenuItem _miOpenWeb;
+        private System.Windows.Forms.ToolStripMenuItem _miOpenCursorWeb;
         private System.Windows.Forms.ToolStripMenuItem _miExit;
     }
 }

@@ -16,6 +16,7 @@ namespace CodexUsageMonitor.UI
         public const int HotkeyTogglePassthrough = 1;
         public const int HotkeyOpacityUp = 2;
         public const int HotkeyOpacityDown = 3;
+        public const int HotkeyExit = 4;
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern int GetWindowLong(IntPtr hWnd, int nIndex);

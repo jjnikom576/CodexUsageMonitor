@@ -15,6 +15,7 @@ namespace CodexUsageMonitor.UI
     public partial class OverlayForm : Form
     {
         private const string AnalyticsUrl = "https://chatgpt.com/codex/cloud/settings/analytics";
+        private const string CursorDashboardUrl = "https://cursor.com/dashboard/usage";
         private const string RegistryKey = @"Software\CodexUsageMonitor";
         private const string StartupRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupRunValueName = "CodexUsageMonitor";
@@ -28,16 +29,23 @@ namespace CodexUsageMonitor.UI
         private const int MeterSpacing = 52;
         private const int LayoutBaseHeight = 80;
         private const int MinClientHeight = 136;
-        private const string ToggleClickableHotkeyText = "Ctrl+Alt+T: make clickable";
-        private const string TogglePassthroughHotkeyText = "Ctrl+Alt+T: make click-through";
+        private const int ColumnDividerX = 380;
+        private const int ColumnInnerPadding = 14;
+        private const int ExitButtonSize = 18;
+        private const int ExitButtonMargin = 8;
+        private const string ToggleClickableHotkeyText = "Ctrl+Alt+T: make clickable | Ctrl+Alt+Q: exit";
+        private const string TogglePassthroughHotkeyText = "Ctrl+Alt+T: make click-through | Ctrl+Alt+Q: exit";
+        private const string ExitButtonTooltipText = "Exit widget";
 
         private readonly AuthStore _authStore = new AuthStore();
+        private readonly CursorAuthStore _cursorAuthStore = new CursorAuthStore();
         private readonly UsageApiClient _api = new UsageApiClient();
+        private readonly CursorUsageApiClient _cursorApi = new CursorUsageApiClient();
         private readonly object _dataLock = new object();
         private readonly System.Windows.Forms.Timer _hoverTimer = new System.Windows.Forms.Timer();
         private readonly ToolTip _hotkeyToolTip = new ToolTip();
 
-        private UsageSnapshot _snapshot = new UsageSnapshot();
+        private CombinedUsageSnapshot _snapshot = new CombinedUsageSnapshot();
         private bool _refreshing;
         private bool _clickThrough = true;
         private bool _hotkeysRegistered;
@@ -49,6 +57,10 @@ namespace CodexUsageMonitor.UI
         private Point _dragStartCursor;
         private Point _dragStartLocation;
         private string _hotkeyToolTipText;
+        private Rectangle _exitButtonRect = Rectangle.Empty;
+        private bool _exitButtonHovered;
+        private EventWaitHandle _exitEvent;
+        private RegisteredWaitHandle _exitWaitHandle;
 
         public OverlayForm()
         {
@@ -94,7 +106,29 @@ namespace CodexUsageMonitor.UI
             _clockTimer.Start();
             _hoverTimer.Start();
             SystemEvents.DisplaySettingsChanged += SystemEvents_DisplaySettingsChanged;
+            SetupExitListener();
             BeginRefresh();
+        }
+
+        private void SetupExitListener()
+        {
+            _exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Global\CodexUsageMonitor.Exit");
+            _exitWaitHandle = ThreadPool.RegisterWaitForSingleObject(_exitEvent, ExitSignalCallback, null, Timeout.Infinite, false);
+        }
+
+        private void ExitSignalCallback(object state, bool timedOut)
+        {
+            if (IsDisposed || !IsHandleCreated)
+                return;
+
+            try
+            {
+                BeginInvoke((MethodInvoker)ExitWidget);
+            }
+            catch
+            {
+                // form closing
+            }
         }
 
         protected override void WndProc(ref Message m)
@@ -112,6 +146,9 @@ namespace CodexUsageMonitor.UI
                     case NativeMethods.HotkeyOpacityDown:
                         AdjustOpacity(-OpacityStep);
                         return;
+                    case NativeMethods.HotkeyExit:
+                        ExitWidget();
+                        return;
                 }
             }
 
@@ -127,7 +164,8 @@ namespace CodexUsageMonitor.UI
             _hotkeysRegistered =
                 NativeMethods.RegisterHotKey(Handle, NativeMethods.HotkeyTogglePassthrough, mod, 0x54) &&
                 NativeMethods.RegisterHotKey(Handle, NativeMethods.HotkeyOpacityUp, mod, 0xBB) &&
-                NativeMethods.RegisterHotKey(Handle, NativeMethods.HotkeyOpacityDown, mod, 0xBD);
+                NativeMethods.RegisterHotKey(Handle, NativeMethods.HotkeyOpacityDown, mod, 0xBD) &&
+                NativeMethods.RegisterHotKey(Handle, NativeMethods.HotkeyExit, mod, 0x51);
         }
 
         private void UnregisterHotKeys()
@@ -138,6 +176,7 @@ namespace CodexUsageMonitor.UI
             NativeMethods.UnregisterHotKey(Handle, NativeMethods.HotkeyTogglePassthrough);
             NativeMethods.UnregisterHotKey(Handle, NativeMethods.HotkeyOpacityUp);
             NativeMethods.UnregisterHotKey(Handle, NativeMethods.HotkeyOpacityDown);
+            NativeMethods.UnregisterHotKey(Handle, NativeMethods.HotkeyExit);
             _hotkeysRegistered = false;
         }
 
@@ -148,7 +187,7 @@ namespace CodexUsageMonitor.UI
             if (_dragging)
                 return;
 
-            if (_snapshot?.HasData == true || _clickThrough)
+            if (_snapshot?.Codex?.HasData == true || _snapshot?.Cursor?.HasData == true || _clickThrough)
                 Invalidate();
         }
 
@@ -164,11 +203,15 @@ namespace CodexUsageMonitor.UI
                 return;
             }
 
-            var text = _clickThrough ? ToggleClickableHotkeyText : TogglePassthroughHotkeyText;
+            var local = PointToClient(cursor);
+            string text;
+            if (!_clickThrough && _exitButtonRect.Contains(local))
+                text = ExitButtonTooltipText;
+            else
+                text = _clickThrough ? ToggleClickableHotkeyText : TogglePassthroughHotkeyText;
             if (_hotkeyToolTipVisible && _hotkeyToolTipText == text)
                 return;
 
-            var local = PointToClient(cursor);
             local.Offset(12, 18);
             _hotkeyToolTip.Show(text, this, local, 2500);
             _hotkeyToolTipVisible = true;
@@ -203,20 +246,28 @@ namespace CodexUsageMonitor.UI
             {
                 try
                 {
-                    if (!_authStore.TryLoad(out var token, out var accountId, out var authError))
-                    {
-                        UpdateSnapshot(new UsageSnapshot { Error = authError, FetchedAtUtc = DateTime.UtcNow });
-                        return;
-                    }
+                    UsageSnapshot codexSnap = null;
+                    CursorUsageSnapshot cursorSnap = null;
 
-                    var snapshot = _api.FetchAsync(token, accountId, CancellationToken.None)
-                        .GetAwaiter()
-                        .GetResult();
-                    UpdateSnapshot(snapshot);
+                    System.Threading.Tasks.Parallel.Invoke(
+                        () => codexSnap = FetchCodexSnapshot(),
+                        () => cursorSnap = FetchCursorSnapshot());
+
+                    UpdateSnapshot(new CombinedUsageSnapshot
+                    {
+                        Codex = codexSnap ?? new UsageSnapshot { FetchedAtUtc = DateTime.UtcNow },
+                        Cursor = cursorSnap ?? new CursorUsageSnapshot { FetchedAtUtc = DateTime.UtcNow },
+                        FetchedAtUtc = DateTime.UtcNow
+                    });
                 }
                 catch (Exception ex)
                 {
-                    UpdateSnapshot(new UsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow });
+                    UpdateSnapshot(new CombinedUsageSnapshot
+                    {
+                        Codex = new UsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow },
+                        Cursor = new CursorUsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow },
+                        FetchedAtUtc = DateTime.UtcNow
+                    });
                 }
                 finally
                 {
@@ -225,11 +276,45 @@ namespace CodexUsageMonitor.UI
             });
         }
 
-        private void UpdateSnapshot(UsageSnapshot snapshot)
+        private UsageSnapshot FetchCodexSnapshot()
+        {
+            try
+            {
+                if (!_authStore.TryLoad(out var token, out var accountId, out var authError))
+                    return new UsageSnapshot { Error = authError, FetchedAtUtc = DateTime.UtcNow };
+
+                return _api.FetchAsync(token, accountId, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception ex)
+            {
+                return new UsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow };
+            }
+        }
+
+        private CursorUsageSnapshot FetchCursorSnapshot()
+        {
+            try
+            {
+                if (!_cursorAuthStore.TryLoad(out var token, out var authError))
+                    return new CursorUsageSnapshot { Error = authError, FetchedAtUtc = DateTime.UtcNow };
+
+                return _cursorApi.FetchAsync(token, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception ex)
+            {
+                return new CursorUsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow };
+            }
+        }
+
+        private void UpdateSnapshot(CombinedUsageSnapshot snapshot)
         {
             lock (_dataLock)
             {
-                _snapshot = snapshot ?? new UsageSnapshot();
+                _snapshot = snapshot ?? new CombinedUsageSnapshot();
             }
 
             if (IsDisposed || !IsHandleCreated)
@@ -273,7 +358,7 @@ namespace CodexUsageMonitor.UI
                 g.DrawPath(border, path);
             }
 
-            UsageSnapshot snap;
+            CombinedUsageSnapshot snap;
             lock (_dataLock)
                 snap = _snapshot;
 
@@ -285,35 +370,12 @@ namespace CodexUsageMonitor.UI
 
             try
             {
-                DrawHeader(g, snap, titleFont, smallFont, bounds);
+                using (var divider = new Pen(Color.FromArgb(70, 120, 132, 148), 1f))
+                    g.DrawLine(divider, ColumnDividerX, 8, ColumnDividerX, bounds.Height - 28);
 
-                if (!string.IsNullOrWhiteSpace(snap.Error))
-                {
-                    DrawMessage(g, labelFont, snap.Error);
-                    DrawFooter(g, snap, smallFont);
-                    return;
-                }
-
-                if (!snap.HasData)
-                {
-                    DrawMessage(g, labelFont, "Loading usage...");
-                    DrawFooter(g, snap, smallFont);
-                    return;
-                }
-
-                DrawStatusBadge(g, valueFont, smallFont, bounds, snap);
-                var windows = GetUsageWindows(snap);
-                for (var i = 0; i < windows.Count; i++)
-                {
-                    var item = windows[i];
-
-                    DrawHudMeter(g, labelFont, valueFont, percentFont, smallFont, 14, MeterTop + (i * MeterSpacing), bounds.Width - 28,
-                        FormatUsageTitle(item.Window),
-                        FormatPeriodBadge(item.Window),
-                        FormatWindowLabel(item.Window),
-                        item.Window);
-                }
-
+                DrawCodexColumn(g, snap?.Codex, titleFont, labelFont, valueFont, percentFont, smallFont, bounds);
+                DrawCursorColumn(g, snap?.Cursor, titleFont, labelFont, valueFont, percentFont, smallFont, bounds);
+                DrawExitButton(g, bounds, smallFont);
                 DrawFooter(g, snap, smallFont);
             }
             finally
@@ -326,12 +388,329 @@ namespace CodexUsageMonitor.UI
             }
         }
 
-        private void ApplySnapshotLayout(UsageSnapshot snap)
+        private void ApplySnapshotLayout(CombinedUsageSnapshot snap)
         {
-            var windowCount = Math.Max(1, GetUsageWindows(snap).Count);
+            var codexMeters = Math.Max(1, GetUsageWindows(snap?.Codex).Count);
+            var cursorMeters = Math.Max(1, GetCursorMeterCount(snap?.Cursor));
+            var windowCount = Math.Max(codexMeters, cursorMeters);
             var targetHeight = Math.Max(MinClientHeight, LayoutBaseHeight + (windowCount * MeterSpacing));
             if (ClientSize.Height != targetHeight)
                 ClientSize = new Size(ClientSize.Width, targetHeight);
+        }
+
+        private void DrawCodexColumn(
+            Graphics g,
+            UsageSnapshot snap,
+            Font titleFont,
+            Font labelFont,
+            Font valueFont,
+            Font percentFont,
+            Font smallFont,
+            Rectangle bounds)
+        {
+            var column = new Rectangle(0, 0, ColumnDividerX, bounds.Height);
+            DrawColumnHeader(g, "Codex", snap?.PlanType, titleFont, smallFont, column, 0);
+
+            if (!string.IsNullOrWhiteSpace(snap?.Error))
+            {
+                DrawColumnMessage(g, labelFont, snap.Error, column, 62);
+                return;
+            }
+
+            if (snap == null || !snap.HasData)
+            {
+                DrawColumnMessage(g, labelFont, "Loading Codex...", column, 62);
+                return;
+            }
+
+            DrawCodexStatusBadge(g, smallFont, column, snap);
+            var windows = GetUsageWindows(snap);
+            for (var i = 0; i < windows.Count; i++)
+            {
+                var item = windows[i];
+                DrawHudMeter(
+                    g,
+                    labelFont,
+                    valueFont,
+                    percentFont,
+                    smallFont,
+                    ColumnInnerPadding,
+                    MeterTop + (i * MeterSpacing),
+                    column.Width - (ColumnInnerPadding * 2),
+                    FormatUsageTitle(item.Window),
+                    FormatPeriodBadge(item.Window),
+                    FormatWindowLabel(item.Window),
+                    item.Window);
+            }
+        }
+
+        private void DrawCursorColumn(
+            Graphics g,
+            CursorUsageSnapshot snap,
+            Font titleFont,
+            Font labelFont,
+            Font valueFont,
+            Font percentFont,
+            Font smallFont,
+            Rectangle bounds)
+        {
+            var column = new Rectangle(ColumnDividerX + 1, 0, bounds.Width - ColumnDividerX - 1, bounds.Height);
+            DrawColumnHeader(g, "Cursor", snap?.MembershipType, titleFont, smallFont, column, ColumnDividerX + 1);
+
+            if (!string.IsNullOrWhiteSpace(snap?.Error))
+            {
+                DrawColumnMessage(g, labelFont, snap.Error, column, 62);
+                return;
+            }
+
+            if (snap == null || !snap.HasData)
+            {
+                DrawColumnMessage(g, labelFont, "Loading Cursor...", column, 62);
+                return;
+            }
+
+            DrawCursorStatusBadge(g, smallFont, column, snap);
+            var meters = GetCursorMeters(snap);
+            for (var i = 0; i < meters.Count; i++)
+            {
+                var meter = meters[i];
+                DrawPercentMeter(
+                    g,
+                    labelFont,
+                    valueFont,
+                    percentFont,
+                    smallFont,
+                    column.X + ColumnInnerPadding,
+                    MeterTop + (i * MeterSpacing),
+                    column.Width - (ColumnInnerPadding * 2),
+                    meter.Title,
+                    meter.PeriodLabel,
+                    meter.Subtitle,
+                    meter.PercentUsed);
+            }
+        }
+
+        private static int GetCursorMeterCount(CursorUsageSnapshot snap)
+        {
+            return snap == null || string.IsNullOrWhiteSpace(snap.Error) ? Math.Max(1, GetCursorMeters(snap).Count) : 1;
+        }
+
+        private static System.Collections.Generic.List<CursorMeter> GetCursorMeters(CursorUsageSnapshot snap)
+        {
+            var meters = new System.Collections.Generic.List<CursorMeter>();
+            if (snap == null)
+                return meters;
+
+            meters.Add(new CursorMeter("Total", "CYCLE", "included usage", snap.TotalPercentUsed));
+            meters.Add(new CursorMeter("API", "NAMED", "model usage", snap.ApiPercentUsed));
+
+            if (snap.AutoPercentUsed > 0 && Math.Abs(snap.AutoPercentUsed - snap.TotalPercentUsed) > 0.1)
+                meters.Add(new CursorMeter("Auto", "AUTO", "model usage", snap.AutoPercentUsed));
+
+            if (snap.OnDemandEnabled && snap.OnDemandUsedCents.GetValueOrDefault() > 0)
+            {
+                var usedDollars = snap.OnDemandUsedCents.GetValueOrDefault() / 100.0;
+                meters.Add(new CursorMeter("On-demand", "PAY", usedDollars.ToString("0.00") + " USD", -1));
+            }
+
+            return meters;
+        }
+
+        private sealed class CursorMeter
+        {
+            public CursorMeter(string title, string periodLabel, string subtitle, double percentUsed)
+            {
+                Title = title;
+                PeriodLabel = periodLabel;
+                Subtitle = subtitle;
+                PercentUsed = percentUsed;
+            }
+
+            public string Title { get; }
+            public string PeriodLabel { get; }
+            public string Subtitle { get; }
+            public double PercentUsed { get; }
+        }
+
+        private void DrawColumnHeader(
+            Graphics g,
+            string title,
+            string plan,
+            Font titleFont,
+            Font smallFont,
+            Rectangle column,
+            int originX)
+        {
+            using (var titleBrush = new SolidBrush(Color.White))
+            using (var subBrush = new SolidBrush(Color.FromArgb(185, 176, 190, 204)))
+            {
+                g.DrawString(title, titleFont, titleBrush, originX + ColumnInnerPadding, 10);
+
+                var planText = string.IsNullOrWhiteSpace(plan) ? "-" : plan.ToUpperInvariant();
+                DrawTrimmedText(
+                    g,
+                    planText,
+                    smallFont,
+                    subBrush,
+                    new Rectangle(originX + column.Width - 104, 12, 90, 14),
+                    StringAlignment.Far);
+            }
+
+            var mode = _clickThrough ? "VIEW" : "EDIT";
+            var modeColor = _clickThrough
+                ? Color.FromArgb(255, 100, 210, 186)
+                : Color.FromArgb(255, 104, 176, 255);
+            using (var modeBrush = new SolidBrush(modeColor))
+                g.DrawString(mode, smallFont, modeBrush, originX + ColumnInnerPadding, 27);
+        }
+
+        private void DrawColumnMessage(Graphics g, Font font, string text, Rectangle column, int y)
+        {
+            using (var brush = new SolidBrush(Color.FromArgb(235, 255, 178, 190)))
+                DrawTrimmedText(
+                    g,
+                    text,
+                    font,
+                    brush,
+                    new Rectangle(column.X + 16, y, column.Width - 32, 36),
+                    StringAlignment.Near);
+        }
+
+        private static void DrawCodexStatusBadge(Graphics g, Font smallFont, Rectangle column, UsageSnapshot snap)
+        {
+            var text = snap.LimitReached ? "LIMIT" : (snap.Allowed ? "READY" : "BLOCKED");
+            var color = snap.LimitReached
+                ? Color.FromArgb(255, 255, 91, 91)
+                : (snap.Allowed ? Color.FromArgb(255, 101, 231, 145) : Color.FromArgb(255, 255, 174, 76));
+
+            DrawStatusBadgeAt(g, smallFont, column.X + column.Width - 84, 25, 70, text, color);
+        }
+
+        private static void DrawCursorStatusBadge(Graphics g, Font smallFont, Rectangle column, CursorUsageSnapshot snap)
+        {
+            string text;
+            Color color;
+            if (snap.IsUnlimited)
+            {
+                text = "∞";
+                color = Color.FromArgb(255, 104, 176, 255);
+            }
+            else if (snap.TotalPercentUsed >= 100 || snap.ApiPercentUsed >= 100)
+            {
+                text = "LIMIT";
+                color = Color.FromArgb(255, 255, 91, 91);
+            }
+            else
+            {
+                text = "READY";
+                color = Color.FromArgb(255, 101, 231, 145);
+            }
+
+            DrawStatusBadgeAt(g, smallFont, column.X + column.Width - 84, 25, 70, text, color);
+        }
+
+        private static void DrawStatusBadgeAt(Graphics g, Font smallFont, int x, int y, int width, string text, Color color)
+        {
+            var badge = new Rectangle(x, y, width, 16);
+            using (var path = RoundedRect(badge, 8))
+            using (var fill = new SolidBrush(Color.FromArgb(54, color)))
+            using (var outline = new Pen(Color.FromArgb(160, color), 1f))
+            using (var brush = new SolidBrush(color))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(outline, path);
+                DrawTrimmedText(g, text, smallFont, brush, badge, StringAlignment.Center);
+            }
+        }
+
+        private void DrawExitButton(Graphics g, Rectangle bounds, Font smallFont)
+        {
+            _exitButtonRect = new Rectangle(
+                bounds.Width - ExitButtonMargin - ExitButtonSize,
+                ExitButtonMargin,
+                ExitButtonSize,
+                ExitButtonSize);
+
+            var fillColor = _exitButtonHovered
+                ? Color.FromArgb(210, 255, 96, 96)
+                : Color.FromArgb(_clickThrough ? 90 : 150, 255, 96, 96);
+            var borderColor = Color.FromArgb(_clickThrough ? 110 : 190, 255, 120, 120);
+
+            using (var path = RoundedRect(_exitButtonRect, 6))
+            using (var fill = new SolidBrush(fillColor))
+            using (var border = new Pen(borderColor, 1f))
+            using (var brush = new SolidBrush(Color.FromArgb(245, 255, 255, 255)))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(border, path);
+                DrawTrimmedText(g, "X", smallFont, brush, _exitButtonRect, StringAlignment.Center);
+            }
+        }
+
+        private static void DrawPercentMeter(
+            Graphics g,
+            Font labelFont,
+            Font valueFont,
+            Font percentFont,
+            Font smallFont,
+            int x,
+            int y,
+            int width,
+            string title,
+            string periodLabel,
+            string subtitle,
+            double percentUsed)
+        {
+            var hasPercent = percentUsed >= 0;
+            var used = hasPercent ? ClampPercent(percentUsed) : 0;
+            var accent = GetUsageColor(used, hasPercent);
+            var accentEnd = ShiftColor(accent, 28);
+            var barRect = new Rectangle(x, y + 29, width, 12);
+            var percentText = hasPercent ? used.ToString("0.#") + "%" : subtitle;
+
+            using (var labelBrush = new SolidBrush(Color.FromArgb(230, 238, 242, 250)))
+            using (var smallBrush = new SolidBrush(Color.FromArgb(166, 178, 190, 204)))
+            using (var valueBrush = new SolidBrush(Color.White))
+            {
+                DrawTrimmedText(g, title, valueFont, labelBrush, new Rectangle(x, y, 84, 18), StringAlignment.Near);
+                var pillWidth = Math.Max(34, Math.Min(70, (periodLabel.Length * 7) + 12));
+                var pillX = x + 88;
+                DrawMiniPill(g, smallFont, periodLabel, pillX, y + 1, pillWidth,
+                    Color.FromArgb(hasPercent ? 55 : 34, accent), Color.FromArgb(hasPercent ? 150 : 90, accent));
+                g.DrawString(subtitle, smallFont, smallBrush, pillX + pillWidth + 8, y + 2);
+                DrawTrimmedText(g, percentText, percentFont, valueBrush, new Rectangle(x + width - 74, y - 2, 74, 24), StringAlignment.Far);
+            }
+
+            if (!hasPercent)
+                return;
+
+            using (var usedBrush = new SolidBrush(Color.FromArgb(150, 184, 194, 206)))
+                DrawTrimmedText(g, "used", smallFont, usedBrush, new Rectangle(x + width - 44, y + 22, 44, 12), StringAlignment.Far);
+
+            using (var trackPath = RoundedRect(barRect, 6))
+            using (var track = new SolidBrush(Color.FromArgb(170, 38, 43, 50)))
+            using (var frame = new Pen(Color.FromArgb(80, 220, 230, 240), 1f))
+            {
+                g.FillPath(track, trackPath);
+
+                var fillWidth = (int)Math.Round(barRect.Width * (used / 100.0));
+                if (fillWidth > 0)
+                {
+                    var fillRect = new Rectangle(barRect.X, barRect.Y, Math.Max(3, fillWidth), barRect.Height);
+                    using (var fillPath = RoundedRect(fillRect, 6))
+                    using (var fill = new LinearGradientBrush(fillRect, accent, accentEnd, LinearGradientMode.Horizontal))
+                        g.FillPath(fill, fillPath);
+                }
+
+                for (var i = 1; i < 5; i++)
+                {
+                    var tickX = barRect.X + (barRect.Width * i / 5);
+                    using (var tick = new Pen(Color.FromArgb(60, 255, 255, 255), 1f))
+                        g.DrawLine(tick, tickX, barRect.Y + 3, tickX, barRect.Bottom - 3);
+                }
+
+                g.DrawPath(frame, trackPath);
+            }
         }
 
         private static System.Collections.Generic.List<UsageLimitWindow> GetUsageWindows(UsageSnapshot snap)
@@ -424,50 +803,6 @@ namespace CodexUsageMonitor.UI
             return FormatWindowLabel(window).ToUpperInvariant();
         }
 
-        private void DrawHeader(Graphics g, UsageSnapshot snap, Font titleFont, Font smallFont, Rectangle bounds)
-        {
-            using (var titleBrush = new SolidBrush(Color.White))
-            using (var subBrush = new SolidBrush(Color.FromArgb(185, 176, 190, 204)))
-            {
-                g.DrawString("Codex Usage", titleFont, titleBrush, 14, 10);
-
-                var plan = string.IsNullOrWhiteSpace(snap.PlanType) ? "-" : snap.PlanType.ToUpperInvariant();
-                DrawTrimmedText(g, plan, smallFont, subBrush, new Rectangle(bounds.Width - 104, 12, 90, 14), StringAlignment.Far);
-            }
-
-            var mode = _clickThrough ? "VIEW" : "EDIT";
-            var modeColor = _clickThrough
-                ? Color.FromArgb(255, 100, 210, 186)
-                : Color.FromArgb(255, 104, 176, 255);
-            using (var modeBrush = new SolidBrush(modeColor))
-                g.DrawString(mode, smallFont, modeBrush, 14, 27);
-        }
-
-        private void DrawMessage(Graphics g, Font font, string text)
-        {
-            using (var brush = new SolidBrush(Color.FromArgb(235, 255, 178, 190)))
-                DrawTrimmedText(g, text, font, brush, new Rectangle(16, 62, ClientSize.Width - 32, 36), StringAlignment.Near);
-        }
-
-        private static void DrawStatusBadge(Graphics g, Font valueFont, Font smallFont, Rectangle bounds, UsageSnapshot snap)
-        {
-            var text = snap.LimitReached ? "LIMIT" : (snap.Allowed ? "READY" : "BLOCKED");
-            var color = snap.LimitReached
-                ? Color.FromArgb(255, 255, 91, 91)
-                : (snap.Allowed ? Color.FromArgb(255, 101, 231, 145) : Color.FromArgb(255, 255, 174, 76));
-
-            var badge = new Rectangle(bounds.Width - 84, 25, 70, 16);
-            using (var path = RoundedRect(badge, 8))
-            using (var fill = new SolidBrush(Color.FromArgb(54, color)))
-            using (var outline = new Pen(Color.FromArgb(160, color), 1f))
-            using (var brush = new SolidBrush(color))
-            {
-                g.FillPath(fill, path);
-                g.DrawPath(outline, path);
-                DrawTrimmedText(g, text, smallFont, brush, badge, StringAlignment.Center);
-            }
-        }
-
         private static void DrawHudMeter(
             Graphics g,
             Font labelFont,
@@ -548,21 +883,30 @@ namespace CodexUsageMonitor.UI
             }
         }
 
-        private void DrawFooter(Graphics g, UsageSnapshot snap, Font smallFont)
+        private void DrawFooter(Graphics g, CombinedUsageSnapshot snap, Font smallFont)
         {
-            var local = snap.FetchedAtUtc.ToLocalTime();
-            var text = string.Format("Opacity {0}% | Ctrl+Alt+T | {1}",
+            var fetchedAt = snap?.FetchedAtUtc ?? DateTime.UtcNow;
+            var local = fetchedAt.ToLocalTime();
+            var text = string.Format("Opacity {0}% | Ctrl+Alt+T | Ctrl+Alt+Q exit | {1}",
                 (int)Math.Round(Opacity * 100),
                 local.ToString("HH:mm:ss"));
 
-            if (snap.HasData)
+            var codex = snap?.Codex;
+            if (codex?.HasData == true)
             {
-                var windows = GetUsageWindows(snap);
+                var windows = GetUsageWindows(codex);
                 for (var i = 0; i < windows.Count; i++)
                 {
                     var window = windows[i].Window;
-                    text += " | " + FormatWindowLabel(window) + " " + FormatCountdown(window.ResetAfterSeconds);
+                    text += " | Codex " + FormatWindowLabel(window) + " " + FormatCountdown(window.ResetAfterSeconds);
                 }
+            }
+
+            var cursor = snap?.Cursor;
+            if (cursor?.BillingCycleEndUtc != null)
+            {
+                var resetSeconds = (long)Math.Max(0, (cursor.BillingCycleEndUtc.Value - DateTime.UtcNow).TotalSeconds);
+                text += " | Cursor cycle " + FormatCountdown(resetSeconds);
             }
 
             using (var brush = new SolidBrush(Color.FromArgb(170, 184, 194, 214)))
@@ -660,6 +1004,12 @@ namespace CodexUsageMonitor.UI
 
             if (e.Button == MouseButtons.Left)
             {
+                if (_exitButtonRect.Contains(e.Location))
+                {
+                    ExitWidget();
+                    return;
+                }
+
                 BeginDrag();
                 return;
             }
@@ -672,6 +1022,16 @@ namespace CodexUsageMonitor.UI
 
         private void OverlayForm_MouseMove(object sender, MouseEventArgs e)
         {
+            if (!_clickThrough)
+            {
+                var hovered = _exitButtonRect.Contains(e.Location);
+                if (hovered != _exitButtonHovered)
+                {
+                    _exitButtonHovered = hovered;
+                    Invalidate();
+                }
+            }
+
             if (!_dragging)
                 return;
 
@@ -698,7 +1058,11 @@ namespace CodexUsageMonitor.UI
             if (_clickThrough)
                 return;
 
-            OpenAnalyticsPage();
+            var local = PointToClient(Cursor.Position);
+            if (local.X < ColumnDividerX)
+                OpenAnalyticsPage();
+            else
+                OpenCursorDashboard();
         }
 
         private void MiRefresh_Click(object sender, EventArgs e) => BeginRefresh();
@@ -709,7 +1073,18 @@ namespace CodexUsageMonitor.UI
 
         private void MiOpenWeb_Click(object sender, EventArgs e) => OpenAnalyticsPage();
 
-        private void MiExit_Click(object sender, EventArgs e) => Close();
+        private void MiOpenCursorWeb_Click(object sender, EventArgs e) => OpenCursorDashboard();
+
+        private void MiExit_Click(object sender, EventArgs e) => ExitWidget();
+
+        private void ExitWidget()
+        {
+            if (IsDisposed)
+                return;
+
+            SaveWindowSettings();
+            Close();
+        }
 
         private void OpacityTrack_Scroll(object sender, EventArgs e)
         {
@@ -718,9 +1093,14 @@ namespace CodexUsageMonitor.UI
 
         private void ContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            if (_clickThrough)
-                e.Cancel = true;
-            else
+            var compact = _clickThrough;
+            _miClickThrough.Visible = !compact;
+            _miAutoStart.Visible = !compact;
+            _miOpacityHost.Visible = !compact;
+            _miOpenWeb.Visible = !compact;
+            _miOpenCursorWeb.Visible = !compact;
+
+            if (!compact)
             {
                 SyncOpacityTrack();
                 UpdateAutoStartMenu();
@@ -876,6 +1256,18 @@ namespace CodexUsageMonitor.UI
             _miOpacityHost.Text = "Opacity " + trackValue + "%";
         }
 
+        private static void OpenCursorDashboard()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(CursorDashboardUrl) { UseShellExecute = true });
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
         private static void OpenAnalyticsPage()
         {
             try
@@ -1011,6 +1403,10 @@ namespace CodexUsageMonitor.UI
             SystemEvents.DisplaySettingsChanged -= SystemEvents_DisplaySettingsChanged;
             HideHotkeyToolTip();
             UnregisterHotKeys();
+            _exitWaitHandle?.Unregister(null);
+            _exitWaitHandle = null;
+            _exitEvent?.Dispose();
+            _exitEvent = null;
             SaveWindowSettings();
             base.OnFormClosing(e);
         }

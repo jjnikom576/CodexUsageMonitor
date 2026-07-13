@@ -13,11 +13,12 @@ if exist "%EXE%" (
 taskkill /F /IM CodexUsageMonitor.exe >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 
-if exist "%EXE%" (
-    start "" "%EXE%"
+call "%~dp0build.bat" || exit /b 1
+
+if exist "%~dp0bin\Release\net48\CodexUsageMonitor.exe" (
+    start "" "%~dp0bin\Release\net48\CodexUsageMonitor.exe"
     exit /b 0
 )
 
-call "%~dp0build.bat" || exit /b 1
 start "" "%~dp0tmp-build\CodexUsageMonitor.exe"
 exit /b 0
