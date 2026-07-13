@@ -15,6 +15,5 @@ C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\tmp-build\CodexUsageMonitor.pdb
 C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\bin\Release\net48\Costura.dll
 C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\bin\Release\net48\Newtonsoft.Json.dll
 C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.exe.config
-C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\tmp-build\Costura.dll
-C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\tmp-build\Newtonsoft.Json.dll
-C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\obj\Release\net48\CodexUsa.12A823FF.Up2Date
+C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.Fody.CopyLocal.cache
+C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.Fody.RuntimeCopyLocal.cache
