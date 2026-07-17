@@ -35,50 +35,57 @@ namespace CodexUsageMonitor.Services
                 {
                     response = await _http.SendAsync(request, ct).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     return ErrorSnapshot("Network: " + ex.Message);
                 }
 
-                var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode)
+                using (response)
                 {
-                    if (response.StatusCode == HttpStatusCode.Unauthorized)
-                        return ErrorSnapshot("Unauthorized. Log in to Cursor IDE.");
+                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        if (response.StatusCode == HttpStatusCode.Unauthorized)
+                            return ErrorSnapshot("Unauthorized. Log in to Cursor IDE.", unauthorized: true);
 
-                    var shortBody = body.Length > 180 ? body.Substring(0, 180) + "..." : body;
-                    return ErrorSnapshot("HTTP " + (int)response.StatusCode + ": " + shortBody);
+                        var shortBody = body.Length > 180 ? body.Substring(0, 180) + "..." : body;
+                        return ErrorSnapshot("HTTP " + (int)response.StatusCode + ": " + shortBody);
+                    }
+
+                    CursorUsageSummaryResponse parsed;
+                    try
+                    {
+                        parsed = JsonConvert.DeserializeObject<CursorUsageSummaryResponse>(body);
+                    }
+                    catch (Exception ex)
+                    {
+                        return ErrorSnapshot("Parse error: " + ex.Message);
+                    }
+
+                    var plan = parsed?.IndividualUsage?.Plan;
+                    var onDemand = parsed?.IndividualUsage?.OnDemand;
+
+                    return new CursorUsageSnapshot
+                    {
+                        MembershipType = parsed?.MembershipType ?? "-",
+                        LimitType = parsed?.LimitType ?? "-",
+                        IsUnlimited = parsed?.IsUnlimited ?? false,
+                        TotalPercentUsed = plan?.TotalPercentUsed ?? 0,
+                        AutoPercentUsed = plan?.AutoPercentUsed ?? 0,
+                        ApiPercentUsed = plan?.ApiPercentUsed ?? 0,
+                        OnDemandEnabled = onDemand?.Enabled ?? false,
+                        OnDemandUsedCents = onDemand?.Used,
+                        BillingCycleStartUtc = ParseUtc(parsed?.BillingCycleStart),
+                        BillingCycleEndUtc = ParseUtc(parsed?.BillingCycleEnd),
+                        AutoMessage = parsed?.AutoModelSelectedDisplayMessage,
+                        ApiMessage = parsed?.NamedModelSelectedDisplayMessage,
+                        FetchedAtUtc = DateTime.UtcNow
+                    };
                 }
-
-                CursorUsageSummaryResponse parsed;
-                try
-                {
-                    parsed = JsonConvert.DeserializeObject<CursorUsageSummaryResponse>(body);
-                }
-                catch (Exception ex)
-                {
-                    return ErrorSnapshot("Parse error: " + ex.Message);
-                }
-
-                var plan = parsed?.IndividualUsage?.Plan;
-                var onDemand = parsed?.IndividualUsage?.OnDemand;
-
-                return new CursorUsageSnapshot
-                {
-                    MembershipType = parsed?.MembershipType ?? "-",
-                    LimitType = parsed?.LimitType ?? "-",
-                    IsUnlimited = parsed?.IsUnlimited ?? false,
-                    TotalPercentUsed = plan?.TotalPercentUsed ?? 0,
-                    AutoPercentUsed = plan?.AutoPercentUsed ?? 0,
-                    ApiPercentUsed = plan?.ApiPercentUsed ?? 0,
-                    OnDemandEnabled = onDemand?.Enabled ?? false,
-                    OnDemandUsedCents = onDemand?.Used,
-                    BillingCycleStartUtc = ParseUtc(parsed?.BillingCycleStart),
-                    BillingCycleEndUtc = ParseUtc(parsed?.BillingCycleEnd),
-                    AutoMessage = parsed?.AutoModelSelectedDisplayMessage,
-                    ApiMessage = parsed?.NamedModelSelectedDisplayMessage,
-                    FetchedAtUtc = DateTime.UtcNow
-                };
             }
         }
 
@@ -93,11 +100,12 @@ namespace CodexUsageMonitor.Services
             return null;
         }
 
-        private static CursorUsageSnapshot ErrorSnapshot(string message)
+        private static CursorUsageSnapshot ErrorSnapshot(string message, bool unauthorized = false)
         {
             return new CursorUsageSnapshot
             {
                 Error = message,
+                Unauthorized = unauthorized,
                 FetchedAtUtc = DateTime.UtcNow
             };
         }

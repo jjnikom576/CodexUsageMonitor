@@ -15,6 +15,33 @@ namespace CodexUsageMonitor.Models
 
         [JsonProperty("rate_limit")]
         public RateLimitBlock RateLimit { get; set; }
+
+        [JsonProperty("rate_limit_reset_credits")]
+        public RateLimitResetCreditsSummary ResetCredits { get; set; }
+    }
+
+    public sealed class RateLimitResetCreditsSummary
+    {
+        [JsonProperty("available_count")]
+        public int AvailableCount { get; set; }
+    }
+
+    public sealed class RateLimitResetCreditsResponse
+    {
+        [JsonProperty("credits")]
+        public List<RateLimitResetCreditResponse> Credits { get; set; } = new List<RateLimitResetCreditResponse>();
+
+        [JsonProperty("available_count")]
+        public int AvailableCount { get; set; }
+    }
+
+    public sealed class RateLimitResetCreditResponse
+    {
+        [JsonProperty("status")]
+        public string Status { get; set; }
+
+        [JsonProperty("expires_at")]
+        public DateTimeOffset? ExpiresAt { get; set; }
     }
 
     public sealed class RateLimitBlock
@@ -61,8 +88,19 @@ namespace CodexUsageMonitor.Models
         public List<UsageLimitWindow> Windows { get; set; } = new List<UsageLimitWindow>();
         public DateTime FetchedAtUtc { get; set; }
         public string Error { get; set; }
+        public bool Unauthorized { get; set; }
+        public int ResetCreditsAvailableCount { get; set; }
 
         public bool HasData => Windows.Count > 0 || Primary != null || Secondary != null;
+    }
+
+    public sealed class RateLimitResetCreditsSnapshot
+    {
+        public List<DateTime> ExpiresAtUtc { get; set; } = new List<DateTime>();
+        public int AvailableCount { get; set; }
+        public DateTime FetchedAtUtc { get; set; }
+        public string Error { get; set; }
+        public bool Unauthorized { get; set; }
     }
 
     public sealed class UsageLimitWindow

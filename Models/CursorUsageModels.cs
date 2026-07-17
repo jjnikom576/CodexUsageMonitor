@@ -94,6 +94,7 @@ namespace CodexUsageMonitor.Models
         public string ApiMessage { get; set; }
         public DateTime FetchedAtUtc { get; set; }
         public string Error { get; set; }
+        public bool Unauthorized { get; set; }
 
         public bool HasData =>
             string.IsNullOrWhiteSpace(Error) &&

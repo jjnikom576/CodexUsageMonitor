@@ -32,6 +32,9 @@ namespace CodexUsageMonitor.UI
             this._miRefresh = new System.Windows.Forms.ToolStripMenuItem();
             this._miClickThrough = new System.Windows.Forms.ToolStripMenuItem();
             this._miAutoStart = new System.Windows.Forms.ToolStripMenuItem();
+            this._miEnableCursor = new System.Windows.Forms.ToolStripMenuItem();
+            this._miShowResetExpiries = new System.Windows.Forms.ToolStripMenuItem();
+            this._miOpacityLabel = new System.Windows.Forms.ToolStripLabel();
             this._miOpacityHost = new System.Windows.Forms.ToolStripControlHost(this._opacityTrack = new System.Windows.Forms.TrackBar());
             this._miOpenWeb = new System.Windows.Forms.ToolStripMenuItem();
             this._miOpenCursorWeb = new System.Windows.Forms.ToolStripMenuItem();
@@ -56,7 +59,7 @@ namespace CodexUsageMonitor.UI
             this._opacityTrack.LargeChange = 10;
             this._opacityTrack.Maximum = 100;
             this._opacityTrack.Minimum = 35;
-            this._opacityTrack.Size = new System.Drawing.Size(170, 30);
+            this._opacityTrack.Size = new System.Drawing.Size(200, 30);
             this._opacityTrack.SmallChange = 5;
             this._opacityTrack.TickFrequency = 5;
             this._opacityTrack.Value = 88;
@@ -68,12 +71,15 @@ namespace CodexUsageMonitor.UI
                 this._miRefresh,
                 this._miClickThrough,
                 this._miAutoStart,
+                this._miEnableCursor,
+                this._miShowResetExpiries,
+                this._miOpacityLabel,
                 this._miOpacityHost,
                 this._miOpenWeb,
                 this._miOpenCursorWeb,
                 this._miExit});
             this._contextMenu.Name = "_contextMenu";
-            this._contextMenu.Size = new System.Drawing.Size(240, 182);
+            this._contextMenu.Size = new System.Drawing.Size(260, 252);
             this._contextMenu.Opening += new System.ComponentModel.CancelEventHandler(this.ContextMenu_Opening);
             //
             // _miRefresh
@@ -97,11 +103,32 @@ namespace CodexUsageMonitor.UI
             this._miAutoStart.Text = "Auto run after startup";
             this._miAutoStart.Click += new System.EventHandler(this.MiAutoStart_Click);
             //
+            // _miEnableCursor
+            //
+            this._miEnableCursor.Name = "_miEnableCursor";
+            this._miEnableCursor.Size = new System.Drawing.Size(239, 22);
+            this._miEnableCursor.Text = "Enable Cursor";
+            this._miEnableCursor.Click += new System.EventHandler(this.MiEnableCursor_Click);
+            //
+            // _miShowResetExpiries
+            //
+            this._miShowResetExpiries.Name = "_miShowResetExpiries";
+            this._miShowResetExpiries.Size = new System.Drawing.Size(239, 22);
+            this._miShowResetExpiries.Text = "Show reset expiry dates";
+            this._miShowResetExpiries.Click += new System.EventHandler(this.MiShowResetExpiries_Click);
+            //
+            // _miOpacityLabel
+            //
+            this._miOpacityLabel.Name = "_miOpacityLabel";
+            this._miOpacityLabel.Size = new System.Drawing.Size(239, 15);
+            this._miOpacityLabel.Text = "Opacity: 88% (drag slider)";
+            //
             // _miOpacityHost
             //
             this._miOpacityHost.Name = "_miOpacityHost";
-            this._miOpacityHost.Size = new System.Drawing.Size(180, 30);
+            this._miOpacityHost.Size = new System.Drawing.Size(210, 30);
             this._miOpacityHost.Text = "Opacity";
+            this._miOpacityHost.ToolTipText = "Drag to adjust opacity (35-100%)";
             //
             // _miOpenWeb
             //
@@ -129,7 +156,7 @@ namespace CodexUsageMonitor.UI
             this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.BackColor = System.Drawing.Color.Magenta;
-            this.ClientSize = new System.Drawing.Size(760, 136);
+            this.ClientSize = new System.Drawing.Size(380, 136);
             this.ContextMenuStrip = this._contextMenu;
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None;
             this.KeyPreview = true;
@@ -158,6 +185,9 @@ namespace CodexUsageMonitor.UI
         private System.Windows.Forms.ToolStripMenuItem _miRefresh;
         private System.Windows.Forms.ToolStripMenuItem _miClickThrough;
         private System.Windows.Forms.ToolStripMenuItem _miAutoStart;
+        private System.Windows.Forms.ToolStripMenuItem _miEnableCursor;
+        private System.Windows.Forms.ToolStripMenuItem _miShowResetExpiries;
+        private System.Windows.Forms.ToolStripLabel _miOpacityLabel;
         private System.Windows.Forms.ToolStripControlHost _miOpacityHost;
         private System.Windows.Forms.TrackBar _opacityTrack;
         private System.Windows.Forms.ToolStripMenuItem _miOpenWeb;

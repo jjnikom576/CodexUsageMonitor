@@ -13,6 +13,7 @@ namespace CodexUsageMonitor.Services
     public sealed class UsageApiClient : IDisposable
     {
         private const string UsageUrl = "https://chatgpt.com/backend-api/wham/usage";
+        private const string ResetCreditsUrl = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
         private readonly HttpClient _http;
 
         public UsageApiClient()
@@ -37,45 +38,123 @@ namespace CodexUsageMonitor.Services
                 {
                     response = await _http.SendAsync(request, ct).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     return ErrorSnapshot("Network: " + ex.Message);
                 }
 
-                var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode)
+                using (response)
                 {
-                    if (response.StatusCode == HttpStatusCode.Unauthorized)
-                        return ErrorSnapshot("Unauthorized. Run: codex login");
+                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        if (response.StatusCode == HttpStatusCode.Unauthorized)
+                            return ErrorSnapshot("Unauthorized. Run: codex login", unauthorized: true);
 
-                    var shortBody = body.Length > 180 ? body.Substring(0, 180) + "..." : body;
-                    return ErrorSnapshot("HTTP " + (int)response.StatusCode + ": " + shortBody);
+                        var shortBody = body.Length > 180 ? body.Substring(0, 180) + "..." : body;
+                        return ErrorSnapshot("HTTP " + (int)response.StatusCode + ": " + shortBody);
+                    }
+
+                    UsageResponse parsed;
+                    JObject raw;
+                    try
+                    {
+                        parsed = JsonConvert.DeserializeObject<UsageResponse>(body);
+                        raw = JObject.Parse(body);
+                    }
+                    catch (Exception ex)
+                    {
+                        return ErrorSnapshot("Parse error: " + ex.Message);
+                    }
+
+                    var rateLimit = parsed?.RateLimit;
+                    return new UsageSnapshot
+                    {
+                        PlanType = parsed?.PlanType ?? "-",
+                        Email = parsed?.Email ?? "-",
+                        Allowed = rateLimit?.Allowed ?? true,
+                        LimitReached = rateLimit?.LimitReached ?? false,
+                        Primary = rateLimit?.PrimaryWindow,
+                        Secondary = rateLimit?.SecondaryWindow,
+                        Windows = BuildUsageWindows(rateLimit, raw["rate_limit"]),
+                        ResetCreditsAvailableCount = Math.Max(0, parsed?.ResetCredits?.AvailableCount ?? 0),
+                        FetchedAtUtc = DateTime.UtcNow
+                    };
                 }
+            }
+        }
 
-                UsageResponse parsed;
-                JObject raw;
+        public async Task<RateLimitResetCreditsSnapshot> FetchResetCreditsAsync(
+            string accessToken,
+            string accountId,
+            CancellationToken ct)
+        {
+            using (var request = new HttpRequestMessage(HttpMethod.Get, ResetCreditsUrl))
+            {
+                request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + accessToken);
+                request.Headers.TryAddWithoutValidation("chatgpt-account-id", accountId);
+
+                HttpResponseMessage response;
                 try
                 {
-                    parsed = JsonConvert.DeserializeObject<UsageResponse>(body);
-                    raw = JObject.Parse(body);
+                    response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
-                    return ErrorSnapshot("Parse error: " + ex.Message);
+                    return ResetCreditsErrorSnapshot("Network: " + ex.Message);
                 }
 
-                var rateLimit = parsed?.RateLimit;
-                return new UsageSnapshot
+                using (response)
                 {
-                    PlanType = parsed?.PlanType ?? "-",
-                    Email = parsed?.Email ?? "-",
-                    Allowed = rateLimit?.Allowed ?? true,
-                    LimitReached = rateLimit?.LimitReached ?? false,
-                    Primary = rateLimit?.PrimaryWindow,
-                    Secondary = rateLimit?.SecondaryWindow,
-                    Windows = BuildUsageWindows(rateLimit, raw["rate_limit"]),
-                    FetchedAtUtc = DateTime.UtcNow
-                };
+                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        if (response.StatusCode == HttpStatusCode.Unauthorized)
+                            return ResetCreditsErrorSnapshot("Unauthorized. Run: codex login", unauthorized: true);
+
+                        var shortBody = body.Length > 180 ? body.Substring(0, 180) + "..." : body;
+                        return ResetCreditsErrorSnapshot("HTTP " + (int)response.StatusCode + ": " + shortBody);
+                    }
+
+                    RateLimitResetCreditsResponse parsed;
+                    try
+                    {
+                        parsed = JsonConvert.DeserializeObject<RateLimitResetCreditsResponse>(body);
+                    }
+                    catch (Exception ex)
+                    {
+                        return ResetCreditsErrorSnapshot("Parse error: " + ex.Message);
+                    }
+
+                    var expiresAtUtc = new List<DateTime>();
+                    if (parsed?.Credits != null)
+                    {
+                        foreach (var credit in parsed.Credits)
+                        {
+                            if (!string.Equals(credit?.Status, "available", StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            if (credit.ExpiresAt.HasValue)
+                                expiresAtUtc.Add(credit.ExpiresAt.Value.UtcDateTime);
+                        }
+                    }
+
+                    expiresAtUtc.Sort();
+                    return new RateLimitResetCreditsSnapshot
+                    {
+                        ExpiresAtUtc = expiresAtUtc,
+                        AvailableCount = Math.Max(expiresAtUtc.Count, parsed?.AvailableCount ?? 0),
+                        FetchedAtUtc = DateTime.UtcNow
+                    };
+                }
             }
         }
 
@@ -184,11 +263,24 @@ namespace CodexUsageMonitor.Services
             return window != null && window.LimitWindowSeconds > 0;
         }
 
-        private static UsageSnapshot ErrorSnapshot(string message)
+        private static UsageSnapshot ErrorSnapshot(string message, bool unauthorized = false)
         {
             return new UsageSnapshot
             {
                 Error = message,
+                Unauthorized = unauthorized,
+                FetchedAtUtc = DateTime.UtcNow
+            };
+        }
+
+        private static RateLimitResetCreditsSnapshot ResetCreditsErrorSnapshot(
+            string message,
+            bool unauthorized = false)
+        {
+            return new RateLimitResetCreditsSnapshot
+            {
+                Error = message,
+                Unauthorized = unauthorized,
                 FetchedAtUtc = DateTime.UtcNow
             };
         }
