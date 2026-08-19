@@ -1115,7 +1115,7 @@ namespace CodexUsageMonitor.UI
         {
             var oldBounds = Bounds;
             var targetWidth = ColumnDividerX * GetColumnCount();
-            var targetHeight = GetBaseClientHeight(snap) + GetResetCreditsExtraHeight();
+            var targetHeight = GetClientHeight(snap);
             if (ClientSize.Width != targetWidth || ClientSize.Height != targetHeight)
             {
                 ClientSize = new Size(targetWidth, targetHeight);
@@ -1124,17 +1124,37 @@ namespace CodexUsageMonitor.UI
             }
         }
 
-        private int GetBaseClientHeight(CombinedUsageSnapshot snap)
+        // Each column's own total content height (meters, plus the reset-credits panel for
+        // Codex) is computed independently, and the window is sized to whichever is tallest.
+        // Appending the reset-credits panel's height on top of the shared max-meter height
+        // (the old approach) over-reserved space once the panel was made to hug Codex's own
+        // meters instead of the tallest column, leaving a large dead gap below it.
+        private int GetClientHeight(CombinedUsageSnapshot snap)
         {
-            var windowCount = 1;
+            var height = MinClientHeight;
             if (_codexEnabled)
-                windowCount = Math.Max(windowCount, Math.Max(1, GetUsageWindows(snap?.Codex).Count));
+                height = Math.Max(height, GetCodexColumnHeight(snap));
             if (_cursorEnabled)
-                windowCount = Math.Max(windowCount, Math.Max(1, GetCursorMeterCount(snap?.Cursor)));
+                height = Math.Max(height, GetMeterAreaHeight(GetCursorMeterCount(snap?.Cursor)));
             if (_claudeEnabled)
-                windowCount = Math.Max(windowCount, Math.Max(1, GetClaudeMeterCount(snap?.Claude)));
+                height = Math.Max(height, GetMeterAreaHeight(GetClaudeMeterCount(snap?.Claude)));
 
-            return Math.Max(MinClientHeight, LayoutBaseHeight + (windowCount * MeterSpacing));
+            return height;
+        }
+
+        private static int GetMeterAreaHeight(int meterCount)
+        {
+            return LayoutBaseHeight + (Math.Max(1, meterCount) * MeterSpacing);
+        }
+
+        private int GetCodexMeterAreaHeight(CombinedUsageSnapshot snap)
+        {
+            return GetMeterAreaHeight(GetUsageWindows(snap?.Codex).Count);
+        }
+
+        private int GetCodexColumnHeight(CombinedUsageSnapshot snap)
+        {
+            return GetCodexMeterAreaHeight(snap) + GetResetCreditsExtraHeight();
         }
 
         private int GetResetCreditsExtraHeight()
@@ -1311,18 +1331,32 @@ namespace CodexUsageMonitor.UI
             if (snap == null)
                 return meters;
 
-            meters.Add(new CursorMeter("Session", "5H", "rolling window", snap.FiveHourUtilization));
-            meters.Add(new CursorMeter("Weekly", "7D", "all models", snap.SevenDayUtilization));
+            var fiveHourSubtitle = WithResetPrefix(snap.FiveHourResetUtc, "rolling window");
+            meters.Add(new CursorMeter("Session", "5H", fiveHourSubtitle, snap.FiveHourUtilization));
+
+            var sevenDaySubtitle = WithResetPrefix(snap.SevenDayResetUtc, "all models");
+            meters.Add(new CursorMeter("Weekly", "7D", sevenDaySubtitle, snap.SevenDayUtilization));
 
             if (snap.SevenDaySonnetUtilization >= 0 &&
                 Math.Abs(snap.SevenDaySonnetUtilization - snap.SevenDayUtilization) > 0.1)
-                meters.Add(new CursorMeter("Sonnet", "7D", "weekly", snap.SevenDaySonnetUtilization));
+                meters.Add(new CursorMeter("Sonnet", "7D", WithResetPrefix(snap.SevenDayResetUtc, "weekly"), snap.SevenDaySonnetUtilization));
 
             if (snap.SevenDayOpusUtilization >= 0 &&
                 Math.Abs(snap.SevenDayOpusUtilization - snap.SevenDayUtilization) > 0.1)
-                meters.Add(new CursorMeter("Opus", "7D", "weekly", snap.SevenDayOpusUtilization));
+                meters.Add(new CursorMeter("Opus", "7D", WithResetPrefix(snap.SevenDayResetUtc, "weekly"), snap.SevenDayOpusUtilization));
 
             return meters;
+        }
+
+        private static string WithResetPrefix(DateTime? resetUtc, string subtitle)
+        {
+            if (!resetUtc.HasValue)
+                return subtitle;
+
+            var local = resetUtc.Value.Kind == DateTimeKind.Utc
+                ? resetUtc.Value.ToLocalTime()
+                : resetUtc.Value;
+            return local.ToString("d/M/yy HH:mm") + " " + subtitle;
         }
 
         private static void DrawClaudeStatusBadge(Graphics g, Font smallFont, Rectangle column, ClaudeUsageSnapshot snap)
@@ -1345,7 +1379,7 @@ namespace CodexUsageMonitor.UI
             Rectangle bounds)
         {
             var columnWidth = GetColumnCount() > 1 ? ColumnDividerX : bounds.Width;
-            var panelTop = GetBaseClientHeight(snap) - 20;
+            var panelTop = GetCodexMeterAreaHeight(snap) - 20;
             var detailCount = _resetCreditsSnapshot?.ExpiresAtUtc?.Count ?? 0;
             var availableCount = Math.Max(
                 detailCount,
