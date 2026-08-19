@@ -17,6 +17,7 @@ namespace CodexUsageMonitor.UI
     {
         private const string AnalyticsUrl = "https://chatgpt.com/codex/cloud/settings/analytics";
         private const string CursorDashboardUrl = "https://cursor.com/dashboard/usage";
+        private const string ClaudeDashboardUrl = "https://claude.ai/settings/usage";
         private const string RegistryKey = @"Software\CodexUsageMonitor";
         private const string StartupRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupRunValueName = "CodexUsageMonitor";
@@ -31,19 +32,21 @@ namespace CodexUsageMonitor.UI
         private const int LayoutBaseHeight = 80;
         private const int MinClientHeight = 136;
         private const int ColumnDividerX = 380;
-        private const int SingleColumnWidth = ColumnDividerX;
-        private const int DualColumnWidth = ColumnDividerX * 2;
         private const int ColumnInnerPadding = 14;
         private const int ExitButtonSize = 18;
         private const int ExitButtonMargin = 8;
         private const int ResetCreditsPanelHeaderHeight = 24;
         private const int ResetCreditRowHeight = 26;
         private const int ResetCreditsPanelBottomPadding = 8;
-        private const string ToggleClickableHotkeyText = "Ctrl+Alt+T: make clickable, then right-click for Cursor, reset dates & opacity | Ctrl+Alt+Q: exit";
-        private const string TogglePassthroughHotkeyText = "Right-click: Cursor, reset dates & opacity | wheel: opacity | Ctrl+Alt+T: click-through | Ctrl+Alt+Q: exit";
+        private const string ToggleClickableHotkeyText = "Ctrl+Alt+T: make clickable, then right-click for Cursor, Claude, reset dates & opacity | Ctrl+Alt+Q: exit";
+        private const string TogglePassthroughHotkeyText = "Right-click: Cursor, Claude, reset dates & opacity | wheel: opacity | Ctrl+Alt+T: click-through | Ctrl+Alt+Q: exit";
         private const string ExitButtonTooltipText = "Exit widget";
         private static readonly TimeSpan NormalRefreshInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan ResetCreditsRefreshInterval = TimeSpan.FromMinutes(5);
+        // The Claude Code /api/oauth/usage endpoint is unofficial and only meant to be hit
+        // occasionally (e.g. when the CLI's /status command runs) -- polling it as fast as the
+        // official Codex/Cursor usage APIs trips Cloudflare's edge rate limiting (HTTP 429).
+        private static readonly TimeSpan ClaudeRefreshInterval = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan FirstErrorBackoff = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan SecondErrorBackoff = TimeSpan.FromMinutes(1);
         private static readonly TimeSpan MaximumErrorBackoff = TimeSpan.FromMinutes(5);
@@ -56,8 +59,10 @@ namespace CodexUsageMonitor.UI
 
         private readonly AuthStore _authStore = new AuthStore();
         private readonly CursorAuthStore _cursorAuthStore = new CursorAuthStore();
+        private readonly ClaudeAuthStore _claudeAuthStore = new ClaudeAuthStore();
         private readonly UsageApiClient _api = new UsageApiClient();
         private readonly CursorUsageApiClient _cursorApi = new CursorUsageApiClient();
+        private readonly ClaudeUsageApiClient _claudeApi = new ClaudeUsageApiClient();
         private readonly object _dataLock = new object();
         private readonly System.Windows.Forms.Timer _hoverTimer = new System.Windows.Forms.Timer();
         private readonly ToolTip _hotkeyToolTip = new ToolTip();
@@ -66,7 +71,9 @@ namespace CodexUsageMonitor.UI
         private CombinedUsageSnapshot _snapshot = new CombinedUsageSnapshot();
         private RateLimitResetCreditsSnapshot _resetCreditsSnapshot = new RateLimitResetCreditsSnapshot();
         private bool _clickThrough = true;
+        private bool _codexEnabled = true;
         private bool _cursorEnabled;
+        private bool _claudeEnabled;
         private bool _showResetExpiryDates;
         private bool _closing;
         private bool _hotkeysRegistered;
@@ -78,19 +85,26 @@ namespace CodexUsageMonitor.UI
         private bool _pendingManualRefreshAfterDrag;
         private bool _codexRefreshInFlight;
         private bool _cursorRefreshInFlight;
+        private bool _claudeRefreshInFlight;
         private bool _resetCreditsRefreshInFlight;
         private bool _codexRefreshPending;
         private bool _cursorRefreshPending;
+        private bool _claudeRefreshPending;
         private bool _resetCreditsRefreshPending;
         private int _codexFailureCount;
         private int _cursorFailureCount;
+        private int _claudeFailureCount;
         private int _resetCreditsFailureCount;
+        private int _codexGeneration;
         private int _cursorGeneration;
+        private int _claudeGeneration;
         private int _resetCreditsGeneration;
         private int _codexAuthChanged;
         private int _cursorAuthChanged;
+        private int _claudeAuthChanged;
         private DateTime _nextCodexRefreshUtc = DateTime.MinValue;
         private DateTime _nextCursorRefreshUtc = DateTime.MinValue;
+        private DateTime _nextClaudeRefreshUtc = DateTime.MinValue;
         private DateTime _nextResetCreditsRefreshUtc = DateTime.MinValue;
         private Point _dragStartCursor;
         private Point _dragStartLocation;
@@ -99,10 +113,13 @@ namespace CodexUsageMonitor.UI
         private bool _exitButtonHovered;
         private EventWaitHandle _exitEvent;
         private RegisteredWaitHandle _exitWaitHandle;
+        private CancellationTokenSource _codexRequestCancellation;
         private CancellationTokenSource _cursorRequestCancellation;
+        private CancellationTokenSource _claudeRequestCancellation;
         private CancellationTokenSource _resetCreditsRequestCancellation;
         private FileSystemWatcher _codexAuthWatcher;
         private FileSystemWatcher _cursorAuthWatcher;
+        private FileSystemWatcher _claudeAuthWatcher;
 
         public OverlayForm()
         {
@@ -144,6 +161,7 @@ namespace CodexUsageMonitor.UI
             SyncOpacityTrack();
             UpdateClickThroughMenu();
             UpdateCursorMenu();
+            UpdateClaudeMenu();
             UpdateResetCreditsMenu();
             UpdateAutoStartMenu();
             EnsureAuthWatchers();
@@ -151,6 +169,7 @@ namespace CodexUsageMonitor.UI
             _clockTimer.Start();
             _hoverTimer.Start();
             SystemEvents.DisplaySettingsChanged += SystemEvents_DisplaySettingsChanged;
+            SystemEvents.SessionSwitch += SystemEvents_SessionSwitch;
             SetupExitListener();
             ScheduleRefreshes(force: true);
         }
@@ -231,6 +250,22 @@ namespace CodexUsageMonitor.UI
             EnsureAuthWatchers(refreshOnCreate: true);
             ProcessAuthFileChanges();
             ScheduleRefreshes(force: false);
+            KeepTopMost();
+        }
+
+        // Cheap periodic nudge: some shell/RDP UI (session banners, notification toasts,
+        // reconnect handshakes) can steal topmost z-order without any event we can hook.
+        // NOMOVE/NOSIZE/NOACTIVATE make this a no-op visually when nothing has changed.
+        private void KeepTopMost()
+        {
+            if (!IsHandleCreated || IsDisposed || _closing || _dragging)
+                return;
+
+            NativeMethods.SetWindowPos(
+                Handle,
+                NativeMethods.HwndTopMost,
+                0, 0, 0, 0,
+                NativeMethods.SwpNoMove | NativeMethods.SwpNoSize | NativeMethods.SwpNoActivate);
         }
 
         private void ClockTimer_Tick(object sender, EventArgs e)
@@ -238,8 +273,9 @@ namespace CodexUsageMonitor.UI
             if (_dragging)
                 return;
 
-            if (_snapshot?.Codex?.HasData == true ||
+            if ((_codexEnabled && _snapshot?.Codex?.HasData == true) ||
                 (_cursorEnabled && _snapshot?.Cursor?.HasData == true) ||
+                (_claudeEnabled && _snapshot?.Claude?.HasData == true) ||
                 _clickThrough)
                 Invalidate();
         }
@@ -281,7 +317,33 @@ namespace CodexUsageMonitor.UI
             _hotkeyToolTipText = null;
         }
 
-        private void SystemEvents_DisplaySettingsChanged(object sender, EventArgs e) => EnsureVisibleOrPlaceDefault();
+        private void SystemEvents_DisplaySettingsChanged(object sender, EventArgs e) => ReassertVisibility();
+
+        private void SystemEvents_SessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
+        {
+            switch (e.Reason)
+            {
+                case SessionSwitchReason.SessionUnlock:
+                case SessionSwitchReason.RemoteConnect:
+                case SessionSwitchReason.ConsoleConnect:
+                    ReassertVisibility();
+                    break;
+            }
+        }
+
+        // RDP reconnects and session unlocks can silently drop the layered/topmost window
+        // state (or leave the widget positioned off the now-different virtual screen), so
+        // re-apply everything that depends on the window/display state coming back cleanly.
+        private void ReassertVisibility()
+        {
+            if (!IsHandleCreated || IsDisposed || _closing)
+                return;
+
+            ApplyClickThrough();
+            KeepTopMost();
+            EnsureVisibleOrPlaceDefault();
+            Invalidate();
+        }
 
         private void ScheduleRefreshes(bool force)
         {
@@ -296,16 +358,19 @@ namespace CodexUsageMonitor.UI
             }
 
             var now = DateTime.UtcNow;
-            ScheduleCodexRefresh(now, force);
+            if (_codexEnabled)
+                ScheduleCodexRefresh(now, force);
             if (_cursorEnabled)
                 ScheduleCursorRefresh(now, force);
-            if (_showResetExpiryDates)
+            if (_claudeEnabled)
+                ScheduleClaudeRefresh(now, force);
+            if (_showResetExpiryDates && _codexEnabled)
                 ScheduleResetCreditsRefresh(now, force);
         }
 
         private void ScheduleCodexRefresh(DateTime now, bool force)
         {
-            if (_closing)
+            if (_closing || !_codexEnabled)
                 return;
 
             if (_codexRefreshInFlight)
@@ -317,8 +382,11 @@ namespace CodexUsageMonitor.UI
             if (!force && now < _nextCodexRefreshUtc)
                 return;
 
+            var generation = _codexGeneration;
+            var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCancellation.Token);
+            _codexRequestCancellation = requestCancellation;
             _codexRefreshInFlight = true;
-            _ = RefreshCodexAsync();
+            _ = RefreshCodexAsync(generation, requestCancellation);
         }
 
         private void ScheduleCursorRefresh(DateTime now, bool force)
@@ -342,6 +410,27 @@ namespace CodexUsageMonitor.UI
             _ = RefreshCursorAsync(generation, requestCancellation);
         }
 
+        private void ScheduleClaudeRefresh(DateTime now, bool force)
+        {
+            if (_closing || !_claudeEnabled)
+                return;
+
+            if (_claudeRefreshInFlight)
+            {
+                _claudeRefreshPending |= force;
+                return;
+            }
+
+            if (!force && now < _nextClaudeRefreshUtc)
+                return;
+
+            var generation = _claudeGeneration;
+            var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCancellation.Token);
+            _claudeRequestCancellation = requestCancellation;
+            _claudeRefreshInFlight = true;
+            _ = RefreshClaudeAsync(generation, requestCancellation);
+        }
+
         private void ScheduleResetCreditsRefresh(DateTime now, bool force)
         {
             if (_closing || !_showResetExpiryDates)
@@ -363,24 +452,24 @@ namespace CodexUsageMonitor.UI
             _ = RefreshResetCreditsAsync(generation, requestCancellation);
         }
 
-        private async Task RefreshCodexAsync()
+        private async Task RefreshCodexAsync(int generation, CancellationTokenSource requestCancellation)
         {
             try
             {
-                var snapshot = await FetchCodexSnapshotAsync(_shutdownCancellation.Token);
-                if (_closing)
+                var snapshot = await FetchCodexSnapshotAsync(requestCancellation.Token);
+                if (_closing || !_codexEnabled || generation != _codexGeneration)
                     return;
 
                 RecordCodexResult(snapshot);
                 ApplyCodexSnapshot(snapshot);
             }
-            catch (OperationCanceledException) when (_shutdownCancellation.IsCancellationRequested)
+            catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
             {
-                // application closing
+                // Codex disabled or application closing
             }
             catch (Exception ex)
             {
-                if (!_closing)
+                if (!_closing && _codexEnabled && generation == _codexGeneration)
                 {
                     var snapshot = new UsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow };
                     RecordCodexResult(snapshot);
@@ -389,8 +478,12 @@ namespace CodexUsageMonitor.UI
             }
             finally
             {
+                if (ReferenceEquals(_codexRequestCancellation, requestCancellation))
+                    _codexRequestCancellation = null;
+
+                requestCancellation.Dispose();
                 _codexRefreshInFlight = false;
-                if (!_closing && _codexRefreshPending)
+                if (!_closing && _codexEnabled && _codexRefreshPending)
                 {
                     _codexRefreshPending = false;
                     ScheduleCodexRefresh(DateTime.UtcNow, force: true);
@@ -433,6 +526,45 @@ namespace CodexUsageMonitor.UI
                 {
                     _cursorRefreshPending = false;
                     ScheduleCursorRefresh(DateTime.UtcNow, force: true);
+                }
+            }
+        }
+
+        private async Task RefreshClaudeAsync(int generation, CancellationTokenSource requestCancellation)
+        {
+            try
+            {
+                var snapshot = await FetchClaudeSnapshotAsync(requestCancellation.Token);
+                if (_closing || !_claudeEnabled || generation != _claudeGeneration)
+                    return;
+
+                RecordClaudeResult(snapshot);
+                ApplyClaudeSnapshot(snapshot);
+            }
+            catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
+            {
+                // Claude disabled or application closing
+            }
+            catch (Exception ex)
+            {
+                if (!_closing && _claudeEnabled && generation == _claudeGeneration)
+                {
+                    var snapshot = new ClaudeUsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow };
+                    RecordClaudeResult(snapshot);
+                    ApplyClaudeSnapshot(snapshot);
+                }
+            }
+            finally
+            {
+                if (ReferenceEquals(_claudeRequestCancellation, requestCancellation))
+                    _claudeRequestCancellation = null;
+
+                requestCancellation.Dispose();
+                _claudeRefreshInFlight = false;
+                if (!_closing && _claudeEnabled && _claudeRefreshPending)
+                {
+                    _claudeRefreshPending = false;
+                    ScheduleClaudeRefresh(DateTime.UtcNow, force: true);
                 }
             }
         }
@@ -518,6 +650,29 @@ namespace CodexUsageMonitor.UI
             }
         }
 
+        private async Task<ClaudeUsageSnapshot> FetchClaudeSnapshotAsync(CancellationToken ct)
+        {
+            try
+            {
+                if (!_claudeAuthStore.TryLoad(out var token, out var subscriptionType, out var authError))
+                    return new ClaudeUsageSnapshot { Error = authError, FetchedAtUtc = DateTime.UtcNow };
+
+                var snapshot = await _claudeApi.FetchAsync(token, ct);
+                if (!string.IsNullOrWhiteSpace(subscriptionType))
+                    snapshot.SubscriptionType = subscriptionType;
+
+                return snapshot;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new ClaudeUsageSnapshot { Error = ex.Message, FetchedAtUtc = DateTime.UtcNow };
+            }
+        }
+
         private async Task<RateLimitResetCreditsSnapshot> FetchResetCreditsSnapshotAsync(CancellationToken ct)
         {
             try
@@ -563,6 +718,16 @@ namespace CodexUsageMonitor.UI
                 ref _cursorFailureCount);
         }
 
+        private void RecordClaudeResult(ClaudeUsageSnapshot snapshot)
+        {
+            _nextClaudeRefreshUtc = GetNextRefreshUtc(
+                DateTime.UtcNow,
+                string.IsNullOrWhiteSpace(snapshot?.Error),
+                snapshot?.Unauthorized == true,
+                ClaudeRefreshInterval,
+                ref _claudeFailureCount);
+        }
+
         private void RecordResetCreditsResult(RateLimitResetCreditsSnapshot snapshot)
         {
             _nextResetCreditsRefreshUtc = GetNextRefreshUtc(
@@ -606,6 +771,7 @@ namespace CodexUsageMonitor.UI
                 {
                     Codex = snapshot ?? new UsageSnapshot { FetchedAtUtc = DateTime.UtcNow },
                     Cursor = _snapshot?.Cursor ?? new CursorUsageSnapshot(),
+                    Claude = _snapshot?.Claude ?? new ClaudeUsageSnapshot(),
                     FetchedAtUtc = DateTime.UtcNow
                 };
                 _snapshot = combined;
@@ -638,6 +804,26 @@ namespace CodexUsageMonitor.UI
                 {
                     Codex = _snapshot?.Codex ?? new UsageSnapshot(),
                     Cursor = snapshot ?? new CursorUsageSnapshot { FetchedAtUtc = DateTime.UtcNow },
+                    Claude = _snapshot?.Claude ?? new ClaudeUsageSnapshot(),
+                    FetchedAtUtc = DateTime.UtcNow
+                };
+                _snapshot = combined;
+            }
+
+            ApplySnapshotLayout(combined);
+            Invalidate();
+        }
+
+        private void ApplyClaudeSnapshot(ClaudeUsageSnapshot snapshot)
+        {
+            CombinedUsageSnapshot combined;
+            lock (_dataLock)
+            {
+                combined = new CombinedUsageSnapshot
+                {
+                    Codex = _snapshot?.Codex ?? new UsageSnapshot(),
+                    Cursor = _snapshot?.Cursor ?? new CursorUsageSnapshot(),
+                    Claude = snapshot ?? new ClaudeUsageSnapshot { FetchedAtUtc = DateTime.UtcNow },
                     FetchedAtUtc = DateTime.UtcNow
                 };
                 _snapshot = combined;
@@ -663,22 +849,36 @@ namespace CodexUsageMonitor.UI
             if (_closing)
                 return;
 
-            if (_codexAuthWatcher == null)
+            if (_codexEnabled && _codexAuthWatcher == null)
             {
-                _codexAuthWatcher = TryCreateAuthWatcher(_authStore.AuthPath, cursor: false);
+                _codexAuthWatcher = TryCreateAuthWatcher(_authStore.AuthPath, AuthProvider.Codex);
                 if (refreshOnCreate && _codexAuthWatcher != null && File.Exists(_authStore.AuthPath))
                     Interlocked.Exchange(ref _codexAuthChanged, 1);
             }
 
             if (_cursorEnabled && _cursorAuthWatcher == null)
             {
-                _cursorAuthWatcher = TryCreateAuthWatcher(_cursorAuthStore.AuthPath, cursor: true);
+                _cursorAuthWatcher = TryCreateAuthWatcher(_cursorAuthStore.AuthPath, AuthProvider.Cursor);
                 if (refreshOnCreate && _cursorAuthWatcher != null && File.Exists(_cursorAuthStore.AuthPath))
                     Interlocked.Exchange(ref _cursorAuthChanged, 1);
             }
+
+            if (_claudeEnabled && _claudeAuthWatcher == null)
+            {
+                _claudeAuthWatcher = TryCreateAuthWatcher(_claudeAuthStore.AuthPath, AuthProvider.Claude);
+                if (refreshOnCreate && _claudeAuthWatcher != null && File.Exists(_claudeAuthStore.AuthPath))
+                    Interlocked.Exchange(ref _claudeAuthChanged, 1);
+            }
         }
 
-        private FileSystemWatcher TryCreateAuthWatcher(string authPath, bool cursor)
+        private enum AuthProvider
+        {
+            Codex,
+            Cursor,
+            Claude
+        }
+
+        private FileSystemWatcher TryCreateAuthWatcher(string authPath, AuthProvider provider)
         {
             try
             {
@@ -697,19 +897,26 @@ namespace CodexUsageMonitor.UI
                                    NotifyFilters.Size
                 };
 
-                if (cursor)
+                switch (provider)
                 {
-                    watcher.Changed += CursorAuthFileChanged;
-                    watcher.Created += CursorAuthFileChanged;
-                    watcher.Deleted += CursorAuthFileChanged;
-                    watcher.Renamed += CursorAuthFileRenamed;
-                }
-                else
-                {
-                    watcher.Changed += CodexAuthFileChanged;
-                    watcher.Created += CodexAuthFileChanged;
-                    watcher.Deleted += CodexAuthFileChanged;
-                    watcher.Renamed += CodexAuthFileRenamed;
+                    case AuthProvider.Cursor:
+                        watcher.Changed += CursorAuthFileChanged;
+                        watcher.Created += CursorAuthFileChanged;
+                        watcher.Deleted += CursorAuthFileChanged;
+                        watcher.Renamed += CursorAuthFileRenamed;
+                        break;
+                    case AuthProvider.Claude:
+                        watcher.Changed += ClaudeAuthFileChanged;
+                        watcher.Created += ClaudeAuthFileChanged;
+                        watcher.Deleted += ClaudeAuthFileChanged;
+                        watcher.Renamed += ClaudeAuthFileRenamed;
+                        break;
+                    default:
+                        watcher.Changed += CodexAuthFileChanged;
+                        watcher.Created += CodexAuthFileChanged;
+                        watcher.Deleted += CodexAuthFileChanged;
+                        watcher.Renamed += CodexAuthFileRenamed;
+                        break;
                 }
 
                 watcher.EnableRaisingEvents = true;
@@ -721,22 +928,37 @@ namespace CodexUsageMonitor.UI
             }
         }
 
-        private void CodexAuthFileChanged(object sender, FileSystemEventArgs e) => QueueAuthFileRefresh(cursor: false);
+        private void CodexAuthFileChanged(object sender, FileSystemEventArgs e) => QueueAuthFileRefresh(AuthProvider.Codex);
 
-        private void CodexAuthFileRenamed(object sender, RenamedEventArgs e) => QueueAuthFileRefresh(cursor: false);
+        private void CodexAuthFileRenamed(object sender, RenamedEventArgs e) => QueueAuthFileRefresh(AuthProvider.Codex);
 
-        private void CursorAuthFileChanged(object sender, FileSystemEventArgs e) => QueueAuthFileRefresh(cursor: true);
+        private void CursorAuthFileChanged(object sender, FileSystemEventArgs e) => QueueAuthFileRefresh(AuthProvider.Cursor);
 
-        private void CursorAuthFileRenamed(object sender, RenamedEventArgs e) => QueueAuthFileRefresh(cursor: true);
+        private void CursorAuthFileRenamed(object sender, RenamedEventArgs e) => QueueAuthFileRefresh(AuthProvider.Cursor);
 
-        private void QueueAuthFileRefresh(bool cursor)
+        private void ClaudeAuthFileChanged(object sender, FileSystemEventArgs e) => QueueAuthFileRefresh(AuthProvider.Claude);
+
+        private void ClaudeAuthFileRenamed(object sender, RenamedEventArgs e) => QueueAuthFileRefresh(AuthProvider.Claude);
+
+        private void QueueAuthFileRefresh(AuthProvider provider)
         {
             if (_closing)
                 return;
 
-            var shouldPost = cursor
-                ? Interlocked.Exchange(ref _cursorAuthChanged, 1) == 0
-                : Interlocked.Exchange(ref _codexAuthChanged, 1) == 0;
+            bool shouldPost;
+            switch (provider)
+            {
+                case AuthProvider.Cursor:
+                    shouldPost = Interlocked.Exchange(ref _cursorAuthChanged, 1) == 0;
+                    break;
+                case AuthProvider.Claude:
+                    shouldPost = Interlocked.Exchange(ref _claudeAuthChanged, 1) == 0;
+                    break;
+                default:
+                    shouldPost = Interlocked.Exchange(ref _codexAuthChanged, 1) == 0;
+                    break;
+            }
+
             if (!shouldPost || IsDisposed || !IsHandleCreated)
                 return;
 
@@ -756,7 +978,7 @@ namespace CodexUsageMonitor.UI
                 return;
 
             var now = DateTime.UtcNow;
-            if (Interlocked.Exchange(ref _codexAuthChanged, 0) != 0)
+            if (Interlocked.Exchange(ref _codexAuthChanged, 0) != 0 && _codexEnabled)
             {
                 _codexFailureCount = 0;
                 _nextCodexRefreshUtc = DateTime.MinValue;
@@ -790,6 +1012,16 @@ namespace CodexUsageMonitor.UI
                     _pendingRefreshAfterDrag = true;
                 else
                     ScheduleCursorRefresh(now, force: true);
+            }
+
+            if (Interlocked.Exchange(ref _claudeAuthChanged, 0) != 0 && _claudeEnabled)
+            {
+                _claudeFailureCount = 0;
+                _nextClaudeRefreshUtc = DateTime.MinValue;
+                if (_dragging)
+                    _pendingRefreshAfterDrag = true;
+                else
+                    ScheduleClaudeRefresh(now, force: true);
             }
         }
 
@@ -826,16 +1058,26 @@ namespace CodexUsageMonitor.UI
 
             try
             {
-                if (_cursorEnabled)
+                var columnCount = GetColumnCount();
+                if (columnCount > 1)
                 {
                     using (var divider = new Pen(Color.FromArgb(70, 120, 132, 148), 1f))
-                        g.DrawLine(divider, ColumnDividerX, 8, ColumnDividerX, bounds.Height - 28);
+                    {
+                        for (var i = 1; i < columnCount; i++)
+                            g.DrawLine(divider, i * ColumnDividerX, 8, i * ColumnDividerX, bounds.Height - 28);
+                    }
                 }
 
-                DrawCodexColumn(g, snap?.Codex, titleFont, labelFont, valueFont, percentFont, smallFont, bounds);
+                if (_codexEnabled)
+                    DrawCodexColumn(g, snap?.Codex, titleFont, labelFont, valueFont, percentFont, smallFont,
+                        GetColumnRect(GetCodexColumnIndex(), columnCount, bounds));
                 if (_cursorEnabled)
-                    DrawCursorColumn(g, snap?.Cursor, titleFont, labelFont, valueFont, percentFont, smallFont, bounds);
-                if (_showResetExpiryDates)
+                    DrawCursorColumn(g, snap?.Cursor, titleFont, labelFont, valueFont, percentFont, smallFont,
+                        GetColumnRect(GetCursorColumnIndex(), columnCount, bounds));
+                if (_claudeEnabled)
+                    DrawClaudeColumn(g, snap?.Claude, titleFont, labelFont, valueFont, percentFont, smallFont,
+                        GetColumnRect(GetClaudeColumnIndex(), columnCount, bounds));
+                if (_showResetExpiryDates && _codexEnabled)
                     DrawResetCreditsPanel(g, snap, labelFont, valueFont, bounds);
                 DrawExitButton(g, bounds, smallFont);
                 DrawFooter(g, snap, smallFont);
@@ -850,10 +1092,29 @@ namespace CodexUsageMonitor.UI
             }
         }
 
+        private int GetColumnCount() => (_codexEnabled ? 1 : 0) + (_cursorEnabled ? 1 : 0) + (_claudeEnabled ? 1 : 0);
+
+        private int GetCodexColumnIndex() => _codexEnabled ? 0 : -1;
+
+        private int GetCursorColumnIndex() => _cursorEnabled ? (_codexEnabled ? 1 : 0) : -1;
+
+        private int GetClaudeColumnIndex() => _claudeEnabled
+            ? (_codexEnabled ? 1 : 0) + (_cursorEnabled ? 1 : 0)
+            : -1;
+
+        private static Rectangle GetColumnRect(int index, int columnCount, Rectangle bounds)
+        {
+            var x = index == 0 ? 0 : (index * ColumnDividerX) + 1;
+            var width = index == columnCount - 1
+                ? bounds.Width - x
+                : (index == 0 ? ColumnDividerX : ColumnDividerX - 1);
+            return new Rectangle(x, 0, width, bounds.Height);
+        }
+
         private void ApplySnapshotLayout(CombinedUsageSnapshot snap, bool preserveNearestEdge = true)
         {
             var oldBounds = Bounds;
-            var targetWidth = _cursorEnabled ? DualColumnWidth : SingleColumnWidth;
+            var targetWidth = ColumnDividerX * GetColumnCount();
             var targetHeight = GetBaseClientHeight(snap) + GetResetCreditsExtraHeight();
             if (ClientSize.Width != targetWidth || ClientSize.Height != targetHeight)
             {
@@ -865,20 +1126,20 @@ namespace CodexUsageMonitor.UI
 
         private int GetBaseClientHeight(CombinedUsageSnapshot snap)
         {
-            var codexMeters = Math.Max(1, GetUsageWindows(snap?.Codex).Count);
-            var windowCount = codexMeters;
+            var windowCount = 1;
+            if (_codexEnabled)
+                windowCount = Math.Max(windowCount, Math.Max(1, GetUsageWindows(snap?.Codex).Count));
             if (_cursorEnabled)
-            {
-                var cursorMeters = Math.Max(1, GetCursorMeterCount(snap?.Cursor));
-                windowCount = Math.Max(codexMeters, cursorMeters);
-            }
+                windowCount = Math.Max(windowCount, Math.Max(1, GetCursorMeterCount(snap?.Cursor)));
+            if (_claudeEnabled)
+                windowCount = Math.Max(windowCount, Math.Max(1, GetClaudeMeterCount(snap?.Claude)));
 
             return Math.Max(MinClientHeight, LayoutBaseHeight + (windowCount * MeterSpacing));
         }
 
         private int GetResetCreditsExtraHeight()
         {
-            if (!_showResetExpiryDates)
+            if (!_showResetExpiryDates || !_codexEnabled)
                 return 0;
 
             return ResetCreditsPanelHeaderHeight +
@@ -912,11 +1173,9 @@ namespace CodexUsageMonitor.UI
             Font valueFont,
             Font percentFont,
             Font smallFont,
-            Rectangle bounds)
+            Rectangle column)
         {
-            var columnWidth = _cursorEnabled ? ColumnDividerX : bounds.Width;
-            var column = new Rectangle(0, 0, columnWidth, bounds.Height);
-            DrawColumnHeader(g, "Codex", snap?.PlanType, titleFont, smallFont, column, 0);
+            DrawColumnHeader(g, "Codex", snap?.PlanType, titleFont, smallFont, column, column.X);
 
             if (!string.IsNullOrWhiteSpace(snap?.Error))
             {
@@ -959,10 +1218,9 @@ namespace CodexUsageMonitor.UI
             Font valueFont,
             Font percentFont,
             Font smallFont,
-            Rectangle bounds)
+            Rectangle column)
         {
-            var column = new Rectangle(ColumnDividerX + 1, 0, bounds.Width - ColumnDividerX - 1, bounds.Height);
-            DrawColumnHeader(g, "Cursor", snap?.MembershipType, titleFont, smallFont, column, ColumnDividerX + 1);
+            DrawColumnHeader(g, "Cursor", snap?.MembershipType, titleFont, smallFont, column, column.X);
 
             if (!string.IsNullOrWhiteSpace(snap?.Error))
             {
@@ -997,6 +1255,88 @@ namespace CodexUsageMonitor.UI
             }
         }
 
+        private void DrawClaudeColumn(
+            Graphics g,
+            ClaudeUsageSnapshot snap,
+            Font titleFont,
+            Font labelFont,
+            Font valueFont,
+            Font percentFont,
+            Font smallFont,
+            Rectangle column)
+        {
+            DrawColumnHeader(g, "Claude", snap?.SubscriptionType, titleFont, smallFont, column, column.X);
+
+            if (!string.IsNullOrWhiteSpace(snap?.Error))
+            {
+                DrawColumnMessage(g, labelFont, snap.Error, column, 62);
+                return;
+            }
+
+            if (snap == null || !snap.HasData)
+            {
+                DrawColumnMessage(g, labelFont, "Loading Claude...", column, 62);
+                return;
+            }
+
+            DrawClaudeStatusBadge(g, smallFont, column, snap);
+            var meters = GetClaudeMeters(snap);
+            for (var i = 0; i < meters.Count; i++)
+            {
+                var meter = meters[i];
+                DrawPercentMeter(
+                    g,
+                    labelFont,
+                    valueFont,
+                    percentFont,
+                    smallFont,
+                    column.X + ColumnInnerPadding,
+                    MeterTop + (i * MeterSpacing),
+                    column.Width - (ColumnInnerPadding * 2),
+                    meter.Title,
+                    meter.PeriodLabel,
+                    meter.Subtitle,
+                    meter.PercentUsed);
+            }
+        }
+
+        private static int GetClaudeMeterCount(ClaudeUsageSnapshot snap)
+        {
+            return snap == null || string.IsNullOrWhiteSpace(snap.Error) ? Math.Max(1, GetClaudeMeters(snap).Count) : 1;
+        }
+
+        private static System.Collections.Generic.List<CursorMeter> GetClaudeMeters(ClaudeUsageSnapshot snap)
+        {
+            var meters = new System.Collections.Generic.List<CursorMeter>();
+            if (snap == null)
+                return meters;
+
+            meters.Add(new CursorMeter("Session", "5H", "rolling window", snap.FiveHourUtilization));
+            meters.Add(new CursorMeter("Weekly", "7D", "all models", snap.SevenDayUtilization));
+
+            if (snap.SevenDaySonnetUtilization >= 0 &&
+                Math.Abs(snap.SevenDaySonnetUtilization - snap.SevenDayUtilization) > 0.1)
+                meters.Add(new CursorMeter("Sonnet", "7D", "weekly", snap.SevenDaySonnetUtilization));
+
+            if (snap.SevenDayOpusUtilization >= 0 &&
+                Math.Abs(snap.SevenDayOpusUtilization - snap.SevenDayUtilization) > 0.1)
+                meters.Add(new CursorMeter("Opus", "7D", "weekly", snap.SevenDayOpusUtilization));
+
+            return meters;
+        }
+
+        private static void DrawClaudeStatusBadge(Graphics g, Font smallFont, Rectangle column, ClaudeUsageSnapshot snap)
+        {
+            var maxUtilization = Math.Max(snap.FiveHourUtilization, snap.SevenDayUtilization);
+            var limitReached = maxUtilization >= 100;
+            var text = limitReached ? "LIMIT" : "READY";
+            var color = limitReached
+                ? Color.FromArgb(255, 255, 91, 91)
+                : Color.FromArgb(255, 101, 231, 145);
+
+            DrawStatusBadgeAt(g, smallFont, column.X + column.Width - 84, 25, 70, text, color);
+        }
+
         private void DrawResetCreditsPanel(
             Graphics g,
             CombinedUsageSnapshot snap,
@@ -1004,7 +1344,7 @@ namespace CodexUsageMonitor.UI
             Font valueFont,
             Rectangle bounds)
         {
-            var columnWidth = _cursorEnabled ? ColumnDividerX : bounds.Width;
+            var columnWidth = GetColumnCount() > 1 ? ColumnDividerX : bounds.Width;
             var panelTop = GetBaseClientHeight(snap) - 20;
             var detailCount = _resetCreditsSnapshot?.ExpiresAtUtc?.Count ?? 0;
             var availableCount = Math.Max(
@@ -1556,7 +1896,7 @@ namespace CodexUsageMonitor.UI
             var text = string.Empty;
 
             var codex = snap?.Codex;
-            if (codex?.HasData == true)
+            if (_codexEnabled && codex?.HasData == true)
             {
                 var windows = GetUsageWindows(codex);
                 for (var i = 0; i < windows.Count; i++)
@@ -1574,6 +1914,14 @@ namespace CodexUsageMonitor.UI
                 var resetSeconds = (long)Math.Max(0, (cursor.BillingCycleEndUtc.Value - DateTime.UtcNow).TotalSeconds);
                 text += (text.Length == 0 ? string.Empty : " | ") +
                         "Cursor cycle " + FormatCountdown(resetSeconds);
+            }
+
+            var claude = snap?.Claude;
+            if (_claudeEnabled && claude?.FiveHourResetUtc != null)
+            {
+                var resetSeconds = (long)Math.Max(0, (claude.FiveHourResetUtc.Value - DateTime.UtcNow).TotalSeconds);
+                text += (text.Length == 0 ? string.Empty : " | ") +
+                        "Claude session " + FormatCountdown(resetSeconds);
             }
 
             text += (text.Length == 0 ? string.Empty : " | ") +
@@ -1767,10 +2115,14 @@ namespace CodexUsageMonitor.UI
                 return;
 
             var local = PointToClient(Cursor.Position);
-            if (!_cursorEnabled || local.X < ColumnDividerX)
-                OpenAnalyticsPage();
-            else
+            var columnCount = GetColumnCount();
+            var index = columnCount <= 1 ? 0 : Math.Min(columnCount - 1, Math.Max(0, local.X / ColumnDividerX));
+            if (index == GetCursorColumnIndex())
                 OpenCursorDashboard();
+            else if (index == GetClaudeColumnIndex())
+                OpenClaudeUsagePage();
+            else
+                OpenAnalyticsPage();
         }
 
         private void MiRefresh_Click(object sender, EventArgs e) => ScheduleRefreshes(force: true);
@@ -1779,8 +2131,14 @@ namespace CodexUsageMonitor.UI
 
         private void MiAutoStart_Click(object sender, EventArgs e) => ToggleAutoStart();
 
+        private void MiEnableCodex_Click(object sender, EventArgs e) =>
+            SetCodexEnabled(!_codexEnabled, persist: true, refresh: true);
+
         private void MiEnableCursor_Click(object sender, EventArgs e) =>
             SetCursorEnabled(!_cursorEnabled, persist: true, refresh: true);
+
+        private void MiEnableClaude_Click(object sender, EventArgs e) =>
+            SetClaudeEnabled(!_claudeEnabled, persist: true, refresh: true);
 
         private void MiShowResetExpiries_Click(object sender, EventArgs e) =>
             SetShowResetExpiryDates(!_showResetExpiryDates, persist: true, refresh: true);
@@ -1788,6 +2146,8 @@ namespace CodexUsageMonitor.UI
         private void MiOpenWeb_Click(object sender, EventArgs e) => OpenAnalyticsPage();
 
         private void MiOpenCursorWeb_Click(object sender, EventArgs e) => OpenCursorDashboard();
+
+        private void MiOpenClaudeWeb_Click(object sender, EventArgs e) => OpenClaudeUsagePage();
 
         private void MiExit_Click(object sender, EventArgs e) => ExitWidget();
 
@@ -1810,17 +2170,22 @@ namespace CodexUsageMonitor.UI
             var compact = _clickThrough;
             _miClickThrough.Visible = !compact;
             _miAutoStart.Visible = !compact;
+            _miEnableCodex.Visible = !compact;
             _miEnableCursor.Visible = !compact;
-            _miShowResetExpiries.Visible = !compact;
+            _miEnableClaude.Visible = !compact;
+            _miShowResetExpiries.Visible = !compact && _codexEnabled;
             _miOpacityLabel.Visible = !compact;
             _miOpacityHost.Visible = !compact;
-            _miOpenWeb.Visible = !compact;
+            _miOpenWeb.Visible = !compact && _codexEnabled;
             _miOpenCursorWeb.Visible = !compact && _cursorEnabled;
+            _miOpenClaudeWeb.Visible = !compact && _claudeEnabled;
 
             if (!compact)
             {
                 SyncOpacityTrack();
+                UpdateCodexMenu();
                 UpdateCursorMenu();
+                UpdateClaudeMenu();
                 UpdateResetCreditsMenu();
                 UpdateAutoStartMenu();
             }
@@ -1866,8 +2231,79 @@ namespace CodexUsageMonitor.UI
                 : "Click-through OFF (Ctrl+Alt+T)";
         }
 
+        private void SetCodexEnabled(bool enabled, bool persist, bool refresh)
+        {
+            if (!enabled && !_cursorEnabled && !_claudeEnabled)
+                return; // keep at least one provider enabled
+
+            var changed = _codexEnabled != enabled;
+            _codexEnabled = enabled;
+            if (changed)
+            {
+                _codexGeneration++;
+                _codexFailureCount = 0;
+                _codexRefreshPending = false;
+                _nextCodexRefreshUtc = enabled ? DateTime.MinValue : DateTime.MaxValue;
+
+                if (!enabled)
+                {
+                    _codexRequestCancellation?.Cancel();
+                    _codexAuthWatcher?.Dispose();
+                    _codexAuthWatcher = null;
+                    Interlocked.Exchange(ref _codexAuthChanged, 0);
+
+                    if (_showResetExpiryDates)
+                    {
+                        _resetCreditsGeneration++;
+                        _resetCreditsFailureCount = 0;
+                        _resetCreditsRequestCancellation?.Cancel();
+                        _resetCreditsSnapshot = new RateLimitResetCreditsSnapshot();
+                    }
+                }
+
+                CombinedUsageSnapshot combined;
+                lock (_dataLock)
+                {
+                    combined = new CombinedUsageSnapshot
+                    {
+                        Codex = new UsageSnapshot(),
+                        Cursor = _snapshot?.Cursor ?? new CursorUsageSnapshot(),
+                        Claude = _snapshot?.Claude ?? new ClaudeUsageSnapshot(),
+                        FetchedAtUtc = _snapshot?.FetchedAtUtc ?? DateTime.UtcNow
+                    };
+                    _snapshot = combined;
+                }
+
+                ApplySnapshotLayout(combined, preserveNearestEdge: true);
+                UpdateResetCreditsMenu();
+                Invalidate();
+            }
+
+            UpdateCodexMenu();
+
+            if (persist)
+                SaveWindowSettings();
+
+            if (enabled && refresh)
+            {
+                EnsureAuthWatchers();
+                ScheduleCodexRefresh(DateTime.UtcNow, force: true);
+                if (_showResetExpiryDates)
+                    ScheduleResetCreditsRefresh(DateTime.UtcNow, force: true);
+            }
+        }
+
+        private void UpdateCodexMenu()
+        {
+            _miEnableCodex.Checked = _codexEnabled;
+            _miEnableCodex.Text = "Enable Codex";
+        }
+
         private void SetCursorEnabled(bool enabled, bool persist, bool refresh)
         {
+            if (!enabled && !_codexEnabled && !_claudeEnabled)
+                return; // keep at least one provider enabled
+
             var changed = _cursorEnabled != enabled;
             _cursorEnabled = enabled;
             if (changed)
@@ -1892,6 +2328,7 @@ namespace CodexUsageMonitor.UI
                     {
                         Codex = _snapshot?.Codex ?? new UsageSnapshot(),
                         Cursor = new CursorUsageSnapshot(),
+                        Claude = _snapshot?.Claude ?? new ClaudeUsageSnapshot(),
                         FetchedAtUtc = _snapshot?.FetchedAtUtc ?? DateTime.UtcNow
                     };
                     _snapshot = combined;
@@ -1917,6 +2354,63 @@ namespace CodexUsageMonitor.UI
         {
             _miEnableCursor.Checked = _cursorEnabled;
             _miEnableCursor.Text = "Enable Cursor";
+        }
+
+        private void SetClaudeEnabled(bool enabled, bool persist, bool refresh)
+        {
+            if (!enabled && !_codexEnabled && !_cursorEnabled)
+                return; // keep at least one provider enabled
+
+            var changed = _claudeEnabled != enabled;
+            _claudeEnabled = enabled;
+            if (changed)
+            {
+                _claudeGeneration++;
+                _claudeFailureCount = 0;
+                _claudeRefreshPending = false;
+                _nextClaudeRefreshUtc = enabled ? DateTime.MinValue : DateTime.MaxValue;
+
+                if (!enabled)
+                {
+                    _claudeRequestCancellation?.Cancel();
+                    _claudeAuthWatcher?.Dispose();
+                    _claudeAuthWatcher = null;
+                    Interlocked.Exchange(ref _claudeAuthChanged, 0);
+                }
+
+                CombinedUsageSnapshot combined;
+                lock (_dataLock)
+                {
+                    combined = new CombinedUsageSnapshot
+                    {
+                        Codex = _snapshot?.Codex ?? new UsageSnapshot(),
+                        Cursor = _snapshot?.Cursor ?? new CursorUsageSnapshot(),
+                        Claude = new ClaudeUsageSnapshot(),
+                        FetchedAtUtc = _snapshot?.FetchedAtUtc ?? DateTime.UtcNow
+                    };
+                    _snapshot = combined;
+                }
+
+                ApplySnapshotLayout(combined, preserveNearestEdge: true);
+                Invalidate();
+            }
+
+            UpdateClaudeMenu();
+
+            if (persist)
+                SaveWindowSettings();
+
+            if (enabled && refresh)
+            {
+                EnsureAuthWatchers();
+                ScheduleClaudeRefresh(DateTime.UtcNow, force: true);
+            }
+        }
+
+        private void UpdateClaudeMenu()
+        {
+            _miEnableClaude.Checked = _claudeEnabled;
+            _miEnableClaude.Text = "Enable Claude Code";
         }
 
         private void SetShowResetExpiryDates(bool enabled, bool persist, bool refresh)
@@ -2094,11 +2588,25 @@ namespace CodexUsageMonitor.UI
             }
         }
 
+        private static void OpenClaudeUsagePage()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(ClaudeDashboardUrl) { UseShellExecute = true });
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
         private void LoadWindowSettings()
         {
             var opacity = 0.88;
             var clickThrough = true;
+            var codexEnabled = true;
             var cursorEnabled = false;
+            var claudeEnabled = false;
             var showResetExpiryDates = false;
             object xValue = null;
             object yValue = null;
@@ -2111,7 +2619,9 @@ namespace CodexUsageMonitor.UI
                     {
                         opacity = Convert.ToDouble(key.GetValue("Opacity") ?? 0.88);
                         clickThrough = Convert.ToInt32(key.GetValue("ClickThrough") ?? 1) != 0;
+                        codexEnabled = Convert.ToInt32(key.GetValue("CodexEnabled") ?? 1) != 0;
                         cursorEnabled = Convert.ToInt32(key.GetValue("CursorEnabled") ?? 0) != 0;
+                        claudeEnabled = Convert.ToInt32(key.GetValue("ClaudeEnabled") ?? 0) != 0;
                         showResetExpiryDates = Convert.ToInt32(key.GetValue("ShowResetExpiryDates") ?? 0) != 0;
                         xValue = key.GetValue("X");
                         yValue = key.GetValue("Y");
@@ -2129,6 +2639,8 @@ namespace CodexUsageMonitor.UI
             SetOpacity(opacity, persist: false);
             SetClickThrough(clickThrough, persist: false);
             SetCursorEnabled(cursorEnabled, persist: false, refresh: false);
+            SetClaudeEnabled(claudeEnabled, persist: false, refresh: false);
+            SetCodexEnabled(codexEnabled, persist: false, refresh: false);
             SetShowResetExpiryDates(showResetExpiryDates, persist: false, refresh: false);
 
             try
@@ -2244,7 +2756,9 @@ namespace CodexUsageMonitor.UI
                 {
                     key.SetValue("Opacity", Opacity);
                     key.SetValue("ClickThrough", _clickThrough ? 1 : 0);
+                    key.SetValue("CodexEnabled", _codexEnabled ? 1 : 0);
                     key.SetValue("CursorEnabled", _cursorEnabled ? 1 : 0);
+                    key.SetValue("ClaudeEnabled", _claudeEnabled ? 1 : 0);
                     key.SetValue("ShowResetExpiryDates", _showResetExpiryDates ? 1 : 0);
                     if (HasUsableVisibleArea(Bounds))
                     {
@@ -2267,17 +2781,25 @@ namespace CodexUsageMonitor.UI
             _hoverTimer.Stop();
             _codexRefreshPending = false;
             _cursorRefreshPending = false;
+            _claudeRefreshPending = false;
             _resetCreditsRefreshPending = false;
+            _codexGeneration++;
             _cursorGeneration++;
+            _claudeGeneration++;
             _resetCreditsGeneration++;
+            _codexRequestCancellation?.Cancel();
             _cursorRequestCancellation?.Cancel();
+            _claudeRequestCancellation?.Cancel();
             _resetCreditsRequestCancellation?.Cancel();
             _shutdownCancellation.Cancel();
             _codexAuthWatcher?.Dispose();
             _codexAuthWatcher = null;
             _cursorAuthWatcher?.Dispose();
             _cursorAuthWatcher = null;
+            _claudeAuthWatcher?.Dispose();
+            _claudeAuthWatcher = null;
             SystemEvents.DisplaySettingsChanged -= SystemEvents_DisplaySettingsChanged;
+            SystemEvents.SessionSwitch -= SystemEvents_SessionSwitch;
             HideHotkeyToolTip();
             UnregisterHotKeys();
             _exitWaitHandle?.Unregister(null);

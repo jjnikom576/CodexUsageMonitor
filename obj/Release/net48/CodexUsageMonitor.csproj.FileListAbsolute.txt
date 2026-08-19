@@ -17,3 +17,37 @@ C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\bin\Release\net48\Newtonsoft.Json
 C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.exe.config
 C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.Fody.CopyLocal.cache
 C:\Users\KALIUNAI_PC\Desktop\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.Fody.RuntimeCopyLocal.cache
+F:\Project\GitHub\CodexUsageMonitor\tmp-build\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\tmp-build\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-build\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.AssemblyReference.cache
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.GeneratedMSBuildEditorConfig.editorconfig
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.AssemblyInfoInputs.cache
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.AssemblyInfo.cs
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.CoreCompileInputs.cache
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.sourcelink.json
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\bin\Release\net48\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\bin\Release\net48\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify 2\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify 2\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify 2\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify 2\Costura.dll
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify 2\Newtonsoft.Json.dll
+F:\Project\GitHub\CodexUsageMonitor\tmp-build\Costura.dll
+F:\Project\GitHub\CodexUsageMonitor\tmp-build\Newtonsoft.Json.dll
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify2 2\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify2 2\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify2 2\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify3 2\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify3 2\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify3 2\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify4 2\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify4 2\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify4 2\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify5 2\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify5 2\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify5 2\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsa.12A823FF.Up2Date

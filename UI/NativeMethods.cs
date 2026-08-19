@@ -18,6 +18,11 @@ namespace CodexUsageMonitor.UI
         public const int HotkeyOpacityDown = 3;
         public const int HotkeyExit = 4;
 
+        public static readonly IntPtr HwndTopMost = new IntPtr(-1);
+        public const uint SwpNoSize = 0x0001;
+        public const uint SwpNoMove = 0x0002;
+        public const uint SwpNoActivate = 0x0010;
+
         [DllImport("user32.dll", SetLastError = true)]
         public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
@@ -29,5 +34,8 @@ namespace CodexUsageMonitor.UI
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
     }
 }

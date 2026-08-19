@@ -111,6 +111,7 @@ namespace CodexUsageMonitor.Models
     {
         public UsageSnapshot Codex { get; set; } = new UsageSnapshot();
         public CursorUsageSnapshot Cursor { get; set; } = new CursorUsageSnapshot();
+        public ClaudeUsageSnapshot Claude { get; set; } = new ClaudeUsageSnapshot();
         public DateTime FetchedAtUtc { get; set; } = DateTime.UtcNow;
     }
 }

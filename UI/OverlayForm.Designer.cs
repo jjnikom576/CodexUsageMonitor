@@ -19,6 +19,7 @@ namespace CodexUsageMonitor.UI
                 _opacityTrack?.Dispose();
                 _api?.Dispose();
                 _cursorApi?.Dispose();
+                _claudeApi?.Dispose();
             }
             base.Dispose(disposing);
         }
@@ -32,12 +33,15 @@ namespace CodexUsageMonitor.UI
             this._miRefresh = new System.Windows.Forms.ToolStripMenuItem();
             this._miClickThrough = new System.Windows.Forms.ToolStripMenuItem();
             this._miAutoStart = new System.Windows.Forms.ToolStripMenuItem();
+            this._miEnableCodex = new System.Windows.Forms.ToolStripMenuItem();
             this._miEnableCursor = new System.Windows.Forms.ToolStripMenuItem();
+            this._miEnableClaude = new System.Windows.Forms.ToolStripMenuItem();
             this._miShowResetExpiries = new System.Windows.Forms.ToolStripMenuItem();
             this._miOpacityLabel = new System.Windows.Forms.ToolStripLabel();
             this._miOpacityHost = new System.Windows.Forms.ToolStripControlHost(this._opacityTrack = new System.Windows.Forms.TrackBar());
             this._miOpenWeb = new System.Windows.Forms.ToolStripMenuItem();
             this._miOpenCursorWeb = new System.Windows.Forms.ToolStripMenuItem();
+            this._miOpenClaudeWeb = new System.Windows.Forms.ToolStripMenuItem();
             this._miExit = new System.Windows.Forms.ToolStripMenuItem();
             ((System.ComponentModel.ISupportInitialize)(this._opacityTrack)).BeginInit();
             this._contextMenu.SuspendLayout();
@@ -71,12 +75,15 @@ namespace CodexUsageMonitor.UI
                 this._miRefresh,
                 this._miClickThrough,
                 this._miAutoStart,
+                this._miEnableCodex,
                 this._miEnableCursor,
+                this._miEnableClaude,
                 this._miShowResetExpiries,
                 this._miOpacityLabel,
                 this._miOpacityHost,
                 this._miOpenWeb,
                 this._miOpenCursorWeb,
+                this._miOpenClaudeWeb,
                 this._miExit});
             this._contextMenu.Name = "_contextMenu";
             this._contextMenu.Size = new System.Drawing.Size(260, 252);
@@ -103,12 +110,26 @@ namespace CodexUsageMonitor.UI
             this._miAutoStart.Text = "Auto run after startup";
             this._miAutoStart.Click += new System.EventHandler(this.MiAutoStart_Click);
             //
+            // _miEnableCodex
+            //
+            this._miEnableCodex.Name = "_miEnableCodex";
+            this._miEnableCodex.Size = new System.Drawing.Size(239, 22);
+            this._miEnableCodex.Text = "Enable Codex";
+            this._miEnableCodex.Click += new System.EventHandler(this.MiEnableCodex_Click);
+            //
             // _miEnableCursor
             //
             this._miEnableCursor.Name = "_miEnableCursor";
             this._miEnableCursor.Size = new System.Drawing.Size(239, 22);
             this._miEnableCursor.Text = "Enable Cursor";
             this._miEnableCursor.Click += new System.EventHandler(this.MiEnableCursor_Click);
+            //
+            // _miEnableClaude
+            //
+            this._miEnableClaude.Name = "_miEnableClaude";
+            this._miEnableClaude.Size = new System.Drawing.Size(239, 22);
+            this._miEnableClaude.Text = "Enable Claude Code";
+            this._miEnableClaude.Click += new System.EventHandler(this.MiEnableClaude_Click);
             //
             // _miShowResetExpiries
             //
@@ -143,6 +164,13 @@ namespace CodexUsageMonitor.UI
             this._miOpenCursorWeb.Size = new System.Drawing.Size(239, 22);
             this._miOpenCursorWeb.Text = "Open Cursor dashboard";
             this._miOpenCursorWeb.Click += new System.EventHandler(this.MiOpenCursorWeb_Click);
+            //
+            // _miOpenClaudeWeb
+            //
+            this._miOpenClaudeWeb.Name = "_miOpenClaudeWeb";
+            this._miOpenClaudeWeb.Size = new System.Drawing.Size(239, 22);
+            this._miOpenClaudeWeb.Text = "Open Claude usage page";
+            this._miOpenClaudeWeb.Click += new System.EventHandler(this.MiOpenClaudeWeb_Click);
             //
             // _miExit
             //
@@ -185,13 +213,16 @@ namespace CodexUsageMonitor.UI
         private System.Windows.Forms.ToolStripMenuItem _miRefresh;
         private System.Windows.Forms.ToolStripMenuItem _miClickThrough;
         private System.Windows.Forms.ToolStripMenuItem _miAutoStart;
+        private System.Windows.Forms.ToolStripMenuItem _miEnableCodex;
         private System.Windows.Forms.ToolStripMenuItem _miEnableCursor;
+        private System.Windows.Forms.ToolStripMenuItem _miEnableClaude;
         private System.Windows.Forms.ToolStripMenuItem _miShowResetExpiries;
         private System.Windows.Forms.ToolStripLabel _miOpacityLabel;
         private System.Windows.Forms.ToolStripControlHost _miOpacityHost;
         private System.Windows.Forms.TrackBar _opacityTrack;
         private System.Windows.Forms.ToolStripMenuItem _miOpenWeb;
         private System.Windows.Forms.ToolStripMenuItem _miOpenCursorWeb;
+        private System.Windows.Forms.ToolStripMenuItem _miOpenClaudeWeb;
         private System.Windows.Forms.ToolStripMenuItem _miExit;
     }
 }
