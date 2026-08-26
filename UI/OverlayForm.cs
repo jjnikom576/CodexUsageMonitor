@@ -79,7 +79,6 @@ namespace CodexUsageMonitor.UI
         private bool _hotkeysRegistered;
         private bool _hotkeyToolTipVisible;
         private bool _dragging;
-        private bool _loadedSavedLocation;
         private bool _refreshTimerWasEnabledBeforeDrag;
         private bool _pendingRefreshAfterDrag;
         private bool _pendingManualRefreshAfterDrag;
@@ -108,6 +107,10 @@ namespace CodexUsageMonitor.UI
         private DateTime _nextResetCreditsRefreshUtc = DateTime.MinValue;
         private Point _dragStartCursor;
         private Point _dragStartLocation;
+        // The pinned position, stored as distance from the main screen's top and right edges
+        // so it survives resolution / monitor changes. Defaults to the top-right corner.
+        private int _anchorRight = FixedMargin;
+        private int _anchorTop = FixedMargin;
         private string _hotkeyToolTipText;
         private Rectangle _exitButtonRect = Rectangle.Empty;
         private bool _exitButtonHovered;
@@ -157,7 +160,7 @@ namespace CodexUsageMonitor.UI
         private void OverlayForm_Load(object sender, EventArgs e)
         {
             LoadWindowSettings();
-            EnsureVisibleOrPlaceDefault();
+            ApplyAnchoredLocation();
             SyncOpacityTrack();
             UpdateClickThroughMenu();
             UpdateCursorMenu();
@@ -215,6 +218,13 @@ namespace CodexUsageMonitor.UI
                         return;
                 }
             }
+            else if (m.Msg == NativeMethods.WmDisplayChange)
+            {
+                // Resolution / monitor topology just changed (RDP connect-disconnect, an
+                // emulated display coming or going, a display being unplugged). Re-pin to the
+                // main screen so the widget cannot be stranded on a display that is now gone.
+                ReassertVisibility();
+            }
 
             base.WndProc(ref m);
         }
@@ -251,6 +261,12 @@ namespace CodexUsageMonitor.UI
             ProcessAuthFileChanges();
             ScheduleRefreshes(force: false);
             KeepTopMost();
+
+            // Safety net for display changes that arrive without a WM_DISPLAYCHANGE / session
+            // event we hook: only rescue when the widget is fully off every screen, so it never
+            // fights the user freely dragging it to a spot that is still visible.
+            if (!_dragging && IsHandleCreated && !HasUsableVisibleArea(Bounds))
+                ApplyAnchoredLocation();
         }
 
         // Cheap periodic nudge: some shell/RDP UI (session banners, notification toasts,
@@ -323,9 +339,12 @@ namespace CodexUsageMonitor.UI
         {
             switch (e.Reason)
             {
+                case SessionSwitchReason.SessionLock:
                 case SessionSwitchReason.SessionUnlock:
                 case SessionSwitchReason.RemoteConnect:
+                case SessionSwitchReason.RemoteDisconnect:
                 case SessionSwitchReason.ConsoleConnect:
+                case SessionSwitchReason.ConsoleDisconnect:
                     ReassertVisibility();
                     break;
             }
@@ -341,7 +360,7 @@ namespace CodexUsageMonitor.UI
 
             ApplyClickThrough();
             KeepTopMost();
-            EnsureVisibleOrPlaceDefault();
+            ApplyAnchoredLocation();
             Invalidate();
         }
 
@@ -2678,8 +2697,8 @@ namespace CodexUsageMonitor.UI
             var cursorEnabled = false;
             var claudeEnabled = false;
             var showResetExpiryDates = false;
-            object xValue = null;
-            object yValue = null;
+            var anchorRight = _anchorRight;
+            var anchorTop = _anchorTop;
 
             try
             {
@@ -2693,8 +2712,13 @@ namespace CodexUsageMonitor.UI
                         cursorEnabled = Convert.ToInt32(key.GetValue("CursorEnabled") ?? 0) != 0;
                         claudeEnabled = Convert.ToInt32(key.GetValue("ClaudeEnabled") ?? 0) != 0;
                         showResetExpiryDates = Convert.ToInt32(key.GetValue("ShowResetExpiryDates") ?? 0) != 0;
-                        xValue = key.GetValue("X");
-                        yValue = key.GetValue("Y");
+
+                        var anchorRightValue = key.GetValue("AnchorRight");
+                        var anchorTopValue = key.GetValue("AnchorTop");
+                        if (anchorRightValue != null)
+                            anchorRight = Convert.ToInt32(anchorRightValue);
+                        if (anchorTopValue != null)
+                            anchorTop = Convert.ToInt32(anchorTopValue);
                     }
                 }
             }
@@ -2706,42 +2730,48 @@ namespace CodexUsageMonitor.UI
             if (double.IsNaN(opacity) || double.IsInfinity(opacity))
                 opacity = 0.88;
 
+            _anchorRight = anchorRight;
+            _anchorTop = anchorTop;
+
             SetOpacity(opacity, persist: false);
             SetClickThrough(clickThrough, persist: false);
             SetCursorEnabled(cursorEnabled, persist: false, refresh: false);
             SetClaudeEnabled(claudeEnabled, persist: false, refresh: false);
             SetCodexEnabled(codexEnabled, persist: false, refresh: false);
             SetShowResetExpiryDates(showResetExpiryDates, persist: false, refresh: false);
-
-            try
-            {
-                if (xValue != null && yValue != null)
-                {
-                    Location = new Point(Convert.ToInt32(xValue), Convert.ToInt32(yValue));
-                    _loadedSavedLocation = true;
-                }
-            }
-            catch
-            {
-                // keep the default location
-            }
         }
 
-        private void EnsureVisibleOrPlaceDefault()
+        // Re-pin the widget to the main (primary) screen at the saved top/right offset. Called
+        // whenever the display or session state changes so an RDP reconnect, a resolution swap,
+        // or a vanished monitor snaps the widget back onto the main screen instead of leaving it
+        // stranded off-screen or on a display that no longer exists. The result is clamped to the
+        // main working area so it is always fully visible on it.
+        private void ApplyAnchoredLocation()
         {
-            if (_loadedSavedLocation && HasUsableVisibleArea(Bounds))
+            if (!IsHandleCreated || IsDisposed || _closing)
                 return;
 
-            PlaceDefault();
-            _loadedSavedLocation = true;
-        }
-
-        private void PlaceDefault()
-        {
             var area = Screen.PrimaryScreen.WorkingArea;
-            var target = new Point(area.Right - Width - FixedMargin, area.Top + FixedMargin);
+            var x = area.Right - Width - _anchorRight;
+            var y = area.Top + _anchorTop;
+
+            var maxX = Math.Max(area.Left, area.Right - Width);
+            var maxY = Math.Max(area.Top, area.Bottom - Height);
+            x = Math.Max(area.Left, Math.Min(maxX, x));
+            y = Math.Max(area.Top, Math.Min(maxY, y));
+
+            var target = new Point(x, y);
             if (Location != target)
                 Location = target;
+        }
+
+        // Capture where the user just dropped the widget as top/right offsets from the main
+        // screen, so the next display change re-pins it to that same spot.
+        private void UpdateAnchorFromCurrentBounds()
+        {
+            var area = Screen.PrimaryScreen.WorkingArea;
+            _anchorRight = area.Right - Bounds.Right;
+            _anchorTop = Bounds.Top - area.Top;
         }
 
         private void KeepResizedWindowVisible(Rectangle oldBounds)
@@ -2801,7 +2831,12 @@ namespace CodexUsageMonitor.UI
 
             _dragging = false;
             Capture = false;
-            EnsureVisibleOrPlaceDefault();
+            // Remember the dropped spot as the new pin when it landed somewhere visible;
+            // otherwise rescue it back onto the main screen at the previous pin.
+            if (HasUsableVisibleArea(Bounds))
+                UpdateAnchorFromCurrentBounds();
+            else
+                ApplyAnchoredLocation();
             SaveWindowSettings();
 
             if (_refreshTimerWasEnabledBeforeDrag)
@@ -2830,11 +2865,8 @@ namespace CodexUsageMonitor.UI
                     key.SetValue("CursorEnabled", _cursorEnabled ? 1 : 0);
                     key.SetValue("ClaudeEnabled", _claudeEnabled ? 1 : 0);
                     key.SetValue("ShowResetExpiryDates", _showResetExpiryDates ? 1 : 0);
-                    if (HasUsableVisibleArea(Bounds))
-                    {
-                        key.SetValue("X", Location.X);
-                        key.SetValue("Y", Location.Y);
-                    }
+                    key.SetValue("AnchorRight", _anchorRight);
+                    key.SetValue("AnchorTop", _anchorTop);
                 }
             }
             catch

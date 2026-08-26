@@ -1,7 +1,7 @@
 {
-  "version": 3,
+  "version": 4,
   "targets": {
-    ".NETFramework,Version=v4.8": {
+    "net48": {
       "Costura.Fody/6.0.0": {
         "type": "package",
         "dependencies": {
@@ -42,7 +42,7 @@
         }
       }
     },
-    ".NETFramework,Version=v4.8/win-x64": {
+    "net48/win-x64": {
       "Costura.Fody/6.0.0": {
         "type": "package",
         "dependencies": {
@@ -172,30 +172,30 @@
     }
   },
   "projectFileDependencyGroups": {
-    ".NETFramework,Version=v4.8": [
+    "net48": [
       "Costura.Fody >= 6.0.0",
       "Fody >= 6.8.2",
       "Newtonsoft.Json >= 13.0.3"
     ]
   },
   "packageFolders": {
-    "C:\\Users\\nicom\\.nuget\\packages\\": {},
+    "C:\\Users\\Bot-Ran\\.nuget\\packages\\": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
     "version": "1.1.1",
     "restore": {
-      "projectUniqueName": "F:\\Project\\GitHub\\CodexUsageMonitor\\CodexUsageMonitor.csproj",
+      "projectUniqueName": "D:\\Project\\RepoClone\\CodexUsageMonitor\\CodexUsageMonitor.csproj",
       "projectName": "CodexUsageMonitor",
-      "projectPath": "F:\\Project\\GitHub\\CodexUsageMonitor\\CodexUsageMonitor.csproj",
-      "packagesPath": "C:\\Users\\nicom\\.nuget\\packages\\",
-      "outputPath": "F:\\Project\\GitHub\\CodexUsageMonitor\\obj\\",
+      "projectPath": "D:\\Project\\RepoClone\\CodexUsageMonitor\\CodexUsageMonitor.csproj",
+      "packagesPath": "C:\\Users\\Bot-Ran\\.nuget\\packages\\",
+      "outputPath": "D:\\Project\\RepoClone\\CodexUsageMonitor\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
       ],
       "configFilePaths": [
-        "C:\\Users\\nicom\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Users\\Bot-Ran\\AppData\\Roaming\\NuGet\\NuGet.Config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
       ],
@@ -204,11 +204,11 @@
       ],
       "sources": {
         "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
-        "C:\\Program Files\\dotnet\\library-packs": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {
         "net48": {
+          "framework": "net48",
           "targetAlias": "net48",
           "projectReferences": {}
         }
@@ -223,10 +223,11 @@
         "auditLevel": "low",
         "auditMode": "direct"
       },
-      "SdkAnalysisLevel": "9.0.300"
+      "SdkAnalysisLevel": "10.0.400"
     },
     "frameworks": {
       "net48": {
+        "framework": "net48",
         "targetAlias": "net48",
         "dependencies": {
           "Costura.Fody": {
@@ -244,7 +245,7 @@
             "version": "[13.0.3, )"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.312\\RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.400\\RuntimeIdentifierGraph.json"
       }
     },
     "runtimes": {

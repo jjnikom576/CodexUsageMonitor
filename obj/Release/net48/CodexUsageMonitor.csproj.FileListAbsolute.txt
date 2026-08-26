@@ -63,3 +63,16 @@ F:\Project\GitHub\CodexUsageMonitor\tmp-verify9 2\CodexUsageMonitor.exe
 F:\Project\GitHub\CodexUsageMonitor\tmp-verify9 2\CodexUsageMonitor.pdb
 F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.exe.config
 F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsa.12A823FF.Up2Date
+D:\Project\RepoClone\CodexUsageMonitor\tmp-build\CodexUsageMonitor.exe.config
+D:\Project\RepoClone\CodexUsageMonitor\tmp-build\CodexUsageMonitor.exe
+D:\Project\RepoClone\CodexUsageMonitor\tmp-build\CodexUsageMonitor.pdb
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.AssemblyReference.cache
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.GeneratedMSBuildEditorConfig.editorconfig
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.AssemblyInfoInputs.cache
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.AssemblyInfo.cs
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.CoreCompileInputs.cache
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.sourcelink.json
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.Fody.CopyLocal.cache
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.csproj.Fody.RuntimeCopyLocal.cache
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.exe
+D:\Project\RepoClone\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.pdb

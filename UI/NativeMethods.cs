@@ -9,6 +9,7 @@ namespace CodexUsageMonitor.UI
         public const int WsExTransparent = 0x00000020;
         public const int WsExLayered = 0x00080000;
         public const int WmHotkey = 0x0312;
+        public const int WmDisplayChange = 0x007E;
 
         public const uint ModAlt = 0x0001;
         public const uint ModControl = 0x0002;
