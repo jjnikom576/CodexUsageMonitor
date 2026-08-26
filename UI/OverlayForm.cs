@@ -1225,7 +1225,7 @@ namespace CodexUsageMonitor.UI
                     column.Width - (ColumnInnerPadding * 2),
                     FormatUsageTitle(item.Window),
                     FormatPeriodBadge(item.Window),
-                    FormatWindowLabel(item.Window),
+                    WithResetPrefix(GetWindowResetUtc(item.Window, snap.FetchedAtUtc), FormatWindowLabel(item.Window) + " window"),
                     item.Window);
             }
         }
@@ -1854,7 +1854,7 @@ namespace CodexUsageMonitor.UI
             int width,
             string title,
             string periodLabel,
-            string windowLabel,
+            string subtitle,
             UsageWindow window)
         {
             var hasData = window != null;
@@ -1874,7 +1874,7 @@ namespace CodexUsageMonitor.UI
                 var pillX = x + 88;
                 DrawMiniPill(g, smallFont, periodLabel, pillX, y + 1, pillWidth,
                     Color.FromArgb(hasData ? 55 : 34, accent), Color.FromArgb(hasData ? 150 : 90, accent));
-                g.DrawString(windowLabel + " window", smallFont, smallBrush, pillX + pillWidth + 8, y + 2);
+                g.DrawString(subtitle, smallFont, smallBrush, pillX + pillWidth + 8, y + 2);
                 DrawTrimmedText(g, percentText, percentFont, valueBrush, percentRect, StringAlignment.Far);
             }
 
@@ -2024,6 +2024,42 @@ namespace CodexUsageMonitor.UI
             if (ts.TotalMinutes >= 1)
                 return string.Format("{0:00}m | {1:00}s", ts.Minutes, ts.Seconds);
             return ts.Seconds + "s";
+        }
+
+        private static DateTime? GetWindowResetUtc(UsageWindow window, DateTime fetchedAtUtc)
+        {
+            if (window == null)
+                return null;
+
+            if (window.ResetAt > 0 && window.ResetAt <= 253402300799L)
+            {
+                try
+                {
+                    return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                        .AddSeconds(window.ResetAt);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // fall back to the relative reset value below
+                }
+            }
+
+            if (window.ResetAfterSeconds <= 0)
+                return null;
+
+            if (fetchedAtUtc == DateTime.MinValue)
+                fetchedAtUtc = DateTime.UtcNow;
+            else if (fetchedAtUtc.Kind != DateTimeKind.Utc)
+                fetchedAtUtc = fetchedAtUtc.ToUniversalTime();
+
+            try
+            {
+                return fetchedAtUtc.AddSeconds(window.ResetAfterSeconds);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return null;
+            }
         }
 
         private static long GetRemainingResetSeconds(UsageWindow window, DateTime fetchedAtUtc, DateTime nowUtc)

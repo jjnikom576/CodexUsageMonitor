@@ -58,5 +58,8 @@ F:\Project\GitHub\CodexUsageMonitor\tmp-verify7 2\CodexUsageMonitor.pdb
 F:\Project\GitHub\CodexUsageMonitor\tmp-verify8 2\CodexUsageMonitor.exe.config
 F:\Project\GitHub\CodexUsageMonitor\tmp-verify8 2\CodexUsageMonitor.exe
 F:\Project\GitHub\CodexUsageMonitor\tmp-verify8 2\CodexUsageMonitor.pdb
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify9 2\CodexUsageMonitor.exe.config
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify9 2\CodexUsageMonitor.exe
+F:\Project\GitHub\CodexUsageMonitor\tmp-verify9 2\CodexUsageMonitor.pdb
 F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsageMonitor.exe.config
 F:\Project\GitHub\CodexUsageMonitor\obj\Release\net48\CodexUsa.12A823FF.Up2Date
