@@ -43,6 +43,8 @@ namespace CodexUsageMonitor.UI
             this._miOpenCursorWeb = new System.Windows.Forms.ToolStripMenuItem();
             this._miOpenClaudeWeb = new System.Windows.Forms.ToolStripMenuItem();
             this._miExit = new System.Windows.Forms.ToolStripMenuItem();
+            this._miToggleVisible = new System.Windows.Forms.ToolStripMenuItem();
+            this._trayIcon = new System.Windows.Forms.NotifyIcon(this.components);
             ((System.ComponentModel.ISupportInitialize)(this._opacityTrack)).BeginInit();
             this._contextMenu.SuspendLayout();
             this.SuspendLayout();
@@ -72,6 +74,7 @@ namespace CodexUsageMonitor.UI
             // _contextMenu
             //
             this._contextMenu.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+                this._miToggleVisible,
                 this._miRefresh,
                 this._miClickThrough,
                 this._miAutoStart,
@@ -179,6 +182,20 @@ namespace CodexUsageMonitor.UI
             this._miExit.Text = "Exit widget (Ctrl+Alt+Q)";
             this._miExit.Click += new System.EventHandler(this.MiExit_Click);
             //
+            // _miToggleVisible
+            //
+            this._miToggleVisible.Name = "_miToggleVisible";
+            this._miToggleVisible.Size = new System.Drawing.Size(219, 22);
+            this._miToggleVisible.Text = "Hide widget";
+            this._miToggleVisible.Click += new System.EventHandler(this.MiToggleVisible_Click);
+            //
+            // _trayIcon
+            //
+            this._trayIcon.Text = "AI Usage Monitor";
+            this._trayIcon.ContextMenuStrip = this._contextMenu;
+            this._trayIcon.DoubleClick += new System.EventHandler(this.TrayIcon_DoubleClick);
+            this._trayIcon.MouseDown += new System.Windows.Forms.MouseEventHandler(this.TrayIcon_MouseDown);
+            //
             // OverlayForm
             //
             this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
@@ -224,5 +241,7 @@ namespace CodexUsageMonitor.UI
         private System.Windows.Forms.ToolStripMenuItem _miOpenCursorWeb;
         private System.Windows.Forms.ToolStripMenuItem _miOpenClaudeWeb;
         private System.Windows.Forms.ToolStripMenuItem _miExit;
+        private System.Windows.Forms.ToolStripMenuItem _miToggleVisible;
+        private System.Windows.Forms.NotifyIcon _trayIcon;
     }
 }

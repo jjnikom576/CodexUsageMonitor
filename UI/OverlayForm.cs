@@ -40,7 +40,7 @@ namespace CodexUsageMonitor.UI
         private const int ResetCreditsPanelBottomPadding = 8;
         private const string ToggleClickableHotkeyText = "Ctrl+Alt+T: make clickable, then right-click for Cursor, Claude, reset dates & opacity | Ctrl+Alt+Q: exit";
         private const string TogglePassthroughHotkeyText = "Right-click: Cursor, Claude, reset dates & opacity | wheel: opacity | Ctrl+Alt+T: click-through | Ctrl+Alt+Q: exit";
-        private const string ExitButtonTooltipText = "Exit widget";
+        private const string ExitButtonTooltipText = "Hide to tray (exit from tray icon)";
         private static readonly TimeSpan NormalRefreshInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan ResetCreditsRefreshInterval = TimeSpan.FromMinutes(5);
         // The Claude Code /api/oauth/usage endpoint is unofficial and only meant to be hit
@@ -111,6 +111,13 @@ namespace CodexUsageMonitor.UI
         // so it survives resolution / monitor changes. Defaults to the top-right corner.
         private int _anchorRight = FixedMargin;
         private int _anchorTop = FixedMargin;
+        private IntPtr _trayIconHandle = IntPtr.Zero;
+        // Set while the shared context menu is being opened from the tray icon so it shows the
+        // full menu even when the widget is in compact (click-through) mode.
+        private bool _contextMenuFromTray;
+        private TrayTipForm _trayTip;
+        private Label _trayTipLabel;
+        private Point _lastTrayCursor;
         private string _hotkeyToolTipText;
         private Rectangle _exitButtonRect = Rectangle.Empty;
         private bool _exitButtonHovered;
@@ -161,6 +168,7 @@ namespace CodexUsageMonitor.UI
         {
             LoadWindowSettings();
             ApplyAnchoredLocation();
+            SetupTrayIcon();
             SyncOpacityTrack();
             UpdateClickThroughMenu();
             UpdateCursorMenu();
@@ -264,8 +272,9 @@ namespace CodexUsageMonitor.UI
 
             // Safety net for display changes that arrive without a WM_DISPLAYCHANGE / session
             // event we hook: only rescue when the widget is fully off every screen, so it never
-            // fights the user freely dragging it to a spot that is still visible.
-            if (!_dragging && IsHandleCreated && !HasUsableVisibleArea(Bounds))
+            // fights the user freely dragging it to a spot that is still visible. Skipped while
+            // the widget is hidden to the tray.
+            if (!_dragging && Visible && IsHandleCreated && !HasUsableVisibleArea(Bounds))
                 ApplyAnchoredLocation();
         }
 
@@ -298,7 +307,19 @@ namespace CodexUsageMonitor.UI
 
         private void HoverTimer_Tick(object sender, EventArgs e)
         {
-            if (!IsHandleCreated || WindowState == FormWindowState.Minimized || _dragging)
+            // NotifyIcon has no "mouse left" event and MouseMove stops firing when the cursor sits
+            // still on the icon, so a time-based hide would flicker. Instead hide only once the
+            // cursor has moved well away from the last spot MouseMove reported over the icon.
+            if (_trayTip != null && _trayTip.Visible)
+            {
+                var pos = Cursor.Position;
+                var dx = pos.X - _lastTrayCursor.X;
+                var dy = pos.Y - _lastTrayCursor.Y;
+                if ((dx * dx) + (dy * dy) > 32 * 32)
+                    _trayTip.Hide();
+            }
+
+            if (!IsHandleCreated || !Visible || WindowState == FormWindowState.Minimized || _dragging)
                 return;
 
             var cursor = Cursor.Position;
@@ -362,6 +383,331 @@ namespace CodexUsageMonitor.UI
             KeepTopMost();
             ApplyAnchoredLocation();
             Invalidate();
+        }
+
+        private void SetupTrayIcon()
+        {
+            if (_trayIcon == null)
+                return;
+
+            _trayIcon.Icon = BuildTrayIcon();
+            // Suppress the native tooltip so only the custom monospace popup shows on hover.
+            _trayIcon.Text = string.Empty;
+            _trayIcon.MouseMove += TrayIcon_MouseMove;
+            _trayIcon.Visible = true;
+        }
+
+        // Draw the tray icon at runtime (a mini three-bar usage glyph) so the app needs no
+        // embedded .ico resource. Icon.FromHandle does not own the HICON, so the handle is kept
+        // and destroyed on close.
+        private Icon BuildTrayIcon()
+        {
+            using (var bmp = new Bitmap(32, 32))
+            {
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.Clear(Color.Transparent);
+
+                    using (var bg = new SolidBrush(Color.FromArgb(235, 24, 26, 32)))
+                    using (var path = RoundedRect(new Rectangle(1, 1, 30, 30), 7))
+                        g.FillPath(bg, path);
+
+                    var barColors = new[]
+                    {
+                        Color.FromArgb(90, 200, 250),
+                        Color.FromArgb(120, 220, 140),
+                        Color.FromArgb(245, 190, 90)
+                    };
+                    var barHeights = new[] { 12, 20, 15 };
+                    var x = 7;
+                    for (var i = 0; i < barColors.Length; i++)
+                    {
+                        using (var b = new SolidBrush(barColors[i]))
+                            g.FillRectangle(b, x, 25 - barHeights[i], 5, barHeights[i]);
+                        x += 7;
+                    }
+                }
+
+                var handle = bmp.GetHicon();
+                if (_trayIconHandle != IntPtr.Zero)
+                    NativeMethods.DestroyIcon(_trayIconHandle);
+                _trayIconHandle = handle;
+                return Icon.FromHandle(handle);
+            }
+        }
+
+        // Build the column-aligned tooltip text for the custom monospace popup. The native
+        // NotifyIcon tooltip uses a proportional font and is hard-capped at 63 chars, so it can
+        // neither line up the columns nor fit full provider names -- hence the owner-drawn popup.
+        // 5H on top, 7D below, providers split by "|"; a Cursor line is appended when enabled.
+        private string BuildTrayTipText()
+        {
+            CombinedUsageSnapshot snap;
+            lock (_dataLock)
+                snap = _snapshot;
+
+            var columns = new System.Collections.Generic.List<TrayColumn>();
+            if (_codexEnabled && snap?.Codex?.HasData == true)
+                columns.Add(BuildCodexColumn(snap));
+            if (_claudeEnabled && snap?.Claude?.HasData == true)
+                columns.Add(BuildClaudeColumn(snap));
+
+            var lines = new System.Collections.Generic.List<string>();
+            if (columns.Count > 0)
+            {
+                lines.Add(BuildTrayRow("5H", columns, fiveHour: true));
+                lines.Add(BuildTrayRow("7D", columns, fiveHour: false));
+            }
+
+            if (_cursorEnabled && snap?.Cursor?.HasData == true)
+            {
+                var reset = snap.Cursor.BillingCycleEndUtc.HasValue
+                    ? "  " + snap.Cursor.BillingCycleEndUtc.Value.ToLocalTime().ToString("dd/MM HH:mm")
+                    : string.Empty;
+                lines.Add("Cursor  " + FormatRemainingShort(snap.Cursor.TotalPercentUsed) + reset);
+            }
+
+            return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "No usage data yet";
+        }
+
+        private TrayColumn BuildCodexColumn(CombinedUsageSnapshot snap)
+        {
+            var column = new TrayColumn { Name = "Codex" };
+            var windows = GetUsageWindows(snap.Codex);
+
+            var fiveHour = PickCodexWindow(windows, true);
+            if (fiveHour != null)
+            {
+                column.FiveHourPercent = FormatRemainingShort(fiveHour.Window.UsedPercent);
+                column.FiveHourReset = FormatTrayClock(GetWindowResetUtc(fiveHour.Window, snap.Codex.FetchedAtUtc));
+            }
+
+            var sevenDay = PickCodexWindow(windows, false);
+            if (sevenDay != null)
+            {
+                column.SevenDayPercent = FormatRemainingShort(sevenDay.Window.UsedPercent);
+                column.SevenDayReset = FormatTrayDate(GetWindowResetUtc(sevenDay.Window, snap.Codex.FetchedAtUtc));
+            }
+
+            return column;
+        }
+
+        private static TrayColumn BuildClaudeColumn(CombinedUsageSnapshot snap)
+        {
+            var column = new TrayColumn { Name = "Claude" };
+
+            if (snap.Claude.FiveHourUtilization >= 0)
+            {
+                column.FiveHourPercent = FormatRemainingShort(snap.Claude.FiveHourUtilization);
+                column.FiveHourReset = FormatTrayClock(snap.Claude.FiveHourResetUtc);
+            }
+
+            if (snap.Claude.SevenDayUtilization >= 0)
+            {
+                column.SevenDayPercent = FormatRemainingShort(snap.Claude.SevenDayUtilization);
+                column.SevenDayReset = FormatTrayDate(snap.Claude.SevenDayResetUtc);
+            }
+
+            return column;
+        }
+
+        // Pad every field to the widest value across both rows so the "|" separators line up in
+        // the monospace popup; only the whole row's trailing padding is trimmed.
+        private static string BuildTrayRow(
+            string label, System.Collections.Generic.List<TrayColumn> columns, bool fiveHour)
+        {
+            var cells = new System.Collections.Generic.List<string>();
+            foreach (var column in columns)
+            {
+                var percent = fiveHour ? column.FiveHourPercent : column.SevenDayPercent;
+                var reset = fiveHour ? column.FiveHourReset : column.SevenDayReset;
+                var percentWidth = Math.Max(column.FiveHourPercent.Length, column.SevenDayPercent.Length);
+                var resetWidth = Math.Max(column.FiveHourReset.Length, column.SevenDayReset.Length);
+                cells.Add(column.Name + "  " + percent.PadLeft(percentWidth) + "  " + reset.PadRight(resetWidth));
+            }
+
+            return (label + "  " + string.Join("  |  ", cells)).TrimEnd();
+        }
+
+        private void ShowTrayTip()
+        {
+            // MouseMove only fires while the cursor is over the tray icon, so its last position
+            // marks where the icon is; the hide check compares against it.
+            _lastTrayCursor = Cursor.Position;
+
+            if (_trayTip == null)
+            {
+                _trayTip = new TrayTipForm();
+                _trayTipLabel = new Label
+                {
+                    AutoSize = true,
+                    Font = new Font("Consolas", 9f),
+                    ForeColor = Color.FromArgb(235, 238, 242, 250),
+                    BackColor = Color.Transparent,
+                    Location = new Point(8, 6)
+                };
+                _trayTip.Controls.Add(_trayTipLabel);
+            }
+
+            var wasVisible = _trayTip.Visible;
+            _trayTipLabel.Text = BuildTrayTipText();
+            var preferred = _trayTipLabel.PreferredSize;
+            _trayTip.ClientSize = new Size(preferred.Width + 16, preferred.Height + 12);
+
+            if (!wasVisible)
+            {
+                var cursor = Cursor.Position;
+                var area = Screen.FromPoint(cursor).WorkingArea;
+                var x = Math.Max(area.Left, Math.Min(cursor.X - _trayTip.Width, area.Right - _trayTip.Width));
+                var y = Math.Max(area.Top, Math.Min(cursor.Y - _trayTip.Height - 8, area.Bottom - _trayTip.Height));
+                _trayTip.Location = new Point(x, y);
+                _trayTip.Show();
+            }
+        }
+
+        private void TrayIcon_MouseMove(object sender, MouseEventArgs e)
+        {
+            ShowTrayTip();
+        }
+
+        private sealed class TrayColumn
+        {
+            public string Name = string.Empty;
+            public string FiveHourPercent = "--";
+            public string FiveHourReset = string.Empty;
+            public string SevenDayPercent = "--";
+            public string SevenDayReset = string.Empty;
+        }
+
+        // A borderless, non-activating tool window used as the tray tooltip so it can use a
+        // monospace font, full provider names, and multiple aligned lines.
+        private sealed class TrayTipForm : Form
+        {
+            public TrayTipForm()
+            {
+                FormBorderStyle = FormBorderStyle.None;
+                ShowInTaskbar = false;
+                TopMost = true;
+                StartPosition = FormStartPosition.Manual;
+                BackColor = Color.FromArgb(24, 26, 32);
+            }
+
+            protected override bool ShowWithoutActivation => true;
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    const int WsExNoActivate = 0x08000000;
+                    const int WsExToolWindow = 0x00000080;
+                    var cp = base.CreateParams;
+                    cp.ExStyle |= WsExNoActivate | WsExToolWindow;
+                    return cp;
+                }
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                using (var pen = new Pen(Color.FromArgb(90, 150, 170, 200)))
+                    e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            }
+        }
+
+        // Codex reports its windows generically; treat any sub-day window as the "5H" bucket and
+        // any multi-day window as the "7D" bucket, picking the shortest / longest of each.
+        private static UsageLimitWindow PickCodexWindow(
+            System.Collections.Generic.List<UsageLimitWindow> windows, bool fiveHour)
+        {
+            UsageLimitWindow best = null;
+            foreach (var candidate in windows)
+            {
+                if (candidate?.Window == null || candidate.Window.LimitWindowSeconds <= 0)
+                    continue;
+
+                var isMultiDay = candidate.Window.LimitWindowSeconds >= 24 * 60 * 60;
+                if (fiveHour == isMultiDay)
+                    continue;
+
+                if (best == null)
+                {
+                    best = candidate;
+                }
+                else if (fiveHour
+                    ? candidate.Window.LimitWindowSeconds < best.Window.LimitWindowSeconds
+                    : candidate.Window.LimitWindowSeconds > best.Window.LimitWindowSeconds)
+                {
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+
+        private static string FormatRemainingShort(double usedPercent)
+        {
+            return (int)Math.Round(GetRemainingPercent(usedPercent)) + "%";
+        }
+
+        private static string FormatTrayClock(DateTime? resetUtc)
+        {
+            return FormatTrayLocal(resetUtc, "HH:mm");
+        }
+
+        private static string FormatTrayDate(DateTime? resetUtc)
+        {
+            return FormatTrayLocal(resetUtc, "dd/MM HH:mm");
+        }
+
+        private static string FormatTrayLocal(DateTime? resetUtc, string format)
+        {
+            if (!resetUtc.HasValue)
+                return string.Empty;
+
+            var local = resetUtc.Value.Kind == DateTimeKind.Utc
+                ? resetUtc.Value.ToLocalTime()
+                : resetUtc.Value;
+            return local.ToString(format);
+        }
+
+        private void TrayIcon_MouseDown(object sender, MouseEventArgs e)
+        {
+            // Fires before the context menu auto-shows on right-up, so the Opening handler can
+            // tell a tray-triggered menu from the widget's own compact menu.
+            if (e.Button == MouseButtons.Right)
+                _contextMenuFromTray = true;
+        }
+
+        private void TrayIcon_DoubleClick(object sender, EventArgs e)
+        {
+            ToggleWidgetVisibility();
+        }
+
+        private void MiToggleVisible_Click(object sender, EventArgs e)
+        {
+            ToggleWidgetVisibility();
+        }
+
+        private void ToggleWidgetVisibility()
+        {
+            if (Visible)
+            {
+                Visible = false;
+            }
+            else
+            {
+                Visible = true;
+                ReassertVisibility();
+            }
+
+            UpdateToggleVisibleMenu();
+        }
+
+        private void UpdateToggleVisibleMenu()
+        {
+            if (_miToggleVisible != null)
+                _miToggleVisible.Text = Visible ? "Hide widget" : "Show widget";
         }
 
         private void ScheduleRefreshes(bool force)
@@ -1998,6 +2344,7 @@ namespace CodexUsageMonitor.UI
             return 100 - ClampPercent(usedPercent);
         }
 
+
         private static Color GetRemainingColor(double remainingPercent, bool hasData)
         {
             if (!hasData)
@@ -2151,7 +2498,9 @@ namespace CodexUsageMonitor.UI
             {
                 if (_exitButtonRect.Contains(e.Location))
                 {
-                    ExitWidget();
+                    // Hide to the tray instead of quitting; the app can only be exited from the
+                    // tray icon's right-click menu.
+                    ToggleWidgetVisibility();
                     return;
                 }
 
@@ -2256,7 +2605,15 @@ namespace CodexUsageMonitor.UI
 
         private void ContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            var compact = _clickThrough;
+            // The tray menu always shows the full set; only the widget's own menu goes compact
+            // while click-through is on.
+            var fromTray = _contextMenuFromTray;
+            _contextMenuFromTray = false;
+            var compact = _clickThrough && !fromTray;
+
+            UpdateToggleVisibleMenu();
+            // Exit lives on the tray menu only, so the widget can't be closed by accident.
+            _miExit.Visible = fromTray;
             _miClickThrough.Visible = !compact;
             _miAutoStart.Visible = !compact;
             _miEnableCodex.Visible = !compact;
@@ -2904,6 +3261,15 @@ namespace CodexUsageMonitor.UI
             SystemEvents.SessionSwitch -= SystemEvents_SessionSwitch;
             HideHotkeyToolTip();
             UnregisterHotKeys();
+            if (_trayIcon != null)
+                _trayIcon.Visible = false;
+            _trayTip?.Dispose();
+            _trayTip = null;
+            if (_trayIconHandle != IntPtr.Zero)
+            {
+                NativeMethods.DestroyIcon(_trayIconHandle);
+                _trayIconHandle = IntPtr.Zero;
+            }
             _exitWaitHandle?.Unregister(null);
             _exitWaitHandle = null;
             _exitEvent?.Dispose();
