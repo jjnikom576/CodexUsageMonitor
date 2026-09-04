@@ -118,6 +118,10 @@ namespace CodexUsageMonitor.UI
         private TrayTipForm _trayTip;
         private Label _trayTipLabel;
         private Point _lastTrayCursor;
+        // Startup visibility: the app defaults to running in the tray with the widget hidden.
+        private bool _startWidgetVisible;
+        private bool _initialShowHandled;
+        private bool _loaded;
         private string _hotkeyToolTipText;
         private Rectangle _exitButtonRect = Rectangle.Empty;
         private bool _exitButtonHovered;
@@ -166,6 +170,17 @@ namespace CodexUsageMonitor.UI
 
         private void OverlayForm_Load(object sender, EventArgs e)
         {
+            InitializeWidget();
+        }
+
+        // Runs exactly once, from whichever fires first: the initial SetVisibleCore (so it still
+        // runs when the app starts hidden to the tray and OnLoad never fires) or OnLoad.
+        private void InitializeWidget()
+        {
+            if (_loaded)
+                return;
+            _loaded = true;
+
             LoadWindowSettings();
             ApplyAnchoredLocation();
             SetupTrayIcon();
@@ -183,6 +198,25 @@ namespace CodexUsageMonitor.UI
             SystemEvents.SessionSwitch += SystemEvents_SessionSwitch;
             SetupExitListener();
             ScheduleRefreshes(force: true);
+        }
+
+        // Default to running in the tray with the widget hidden. Setting Visible=false in OnLoad
+        // does not work because Application.Run's own Show overrides it, so intercept the first
+        // visibility change: force the handle (so the tray icon, timers and hotkeys initialize),
+        // run the one-time setup, then honor the saved startup visibility with no on-screen flash.
+        protected override void SetVisibleCore(bool value)
+        {
+            if (!_initialShowHandled)
+            {
+                _initialShowHandled = true;
+                if (!IsHandleCreated)
+                    _ = Handle;
+                InitializeWidget();
+                base.SetVisibleCore(value && _startWidgetVisible);
+                return;
+            }
+
+            base.SetVisibleCore(value);
         }
 
         private void SetupExitListener()
@@ -702,6 +736,7 @@ namespace CodexUsageMonitor.UI
             }
 
             UpdateToggleVisibleMenu();
+            SaveWindowSettings();
         }
 
         private void UpdateToggleVisibleMenu()
@@ -2139,13 +2174,15 @@ namespace CodexUsageMonitor.UI
 
         private static void SortUsageWindows(System.Collections.Generic.List<UsageLimitWindow> windows)
         {
+            // Order by window length (short first: 5h above 7d) so the session window is always on
+            // top and the order never shuffles as usage changes -- matching the Claude column.
             windows.Sort((left, right) =>
             {
-                var usedCompare = right.Window.UsedPercent.CompareTo(left.Window.UsedPercent);
-                if (usedCompare != 0)
-                    return usedCompare;
+                var lengthCompare = left.Window.LimitWindowSeconds.CompareTo(right.Window.LimitWindowSeconds);
+                if (lengthCompare != 0)
+                    return lengthCompare;
 
-                return left.Window.LimitWindowSeconds.CompareTo(right.Window.LimitWindowSeconds);
+                return right.Window.UsedPercent.CompareTo(left.Window.UsedPercent);
             });
         }
 
@@ -3054,6 +3091,7 @@ namespace CodexUsageMonitor.UI
             var cursorEnabled = false;
             var claudeEnabled = false;
             var showResetExpiryDates = false;
+            var widgetVisible = false;
             var anchorRight = _anchorRight;
             var anchorTop = _anchorTop;
 
@@ -3069,6 +3107,7 @@ namespace CodexUsageMonitor.UI
                         cursorEnabled = Convert.ToInt32(key.GetValue("CursorEnabled") ?? 0) != 0;
                         claudeEnabled = Convert.ToInt32(key.GetValue("ClaudeEnabled") ?? 0) != 0;
                         showResetExpiryDates = Convert.ToInt32(key.GetValue("ShowResetExpiryDates") ?? 0) != 0;
+                        widgetVisible = Convert.ToInt32(key.GetValue("WidgetVisible") ?? 0) != 0;
 
                         var anchorRightValue = key.GetValue("AnchorRight");
                         var anchorTopValue = key.GetValue("AnchorTop");
@@ -3089,6 +3128,7 @@ namespace CodexUsageMonitor.UI
 
             _anchorRight = anchorRight;
             _anchorTop = anchorTop;
+            _startWidgetVisible = widgetVisible;
 
             SetOpacity(opacity, persist: false);
             SetClickThrough(clickThrough, persist: false);
@@ -3222,6 +3262,7 @@ namespace CodexUsageMonitor.UI
                     key.SetValue("CursorEnabled", _cursorEnabled ? 1 : 0);
                     key.SetValue("ClaudeEnabled", _claudeEnabled ? 1 : 0);
                     key.SetValue("ShowResetExpiryDates", _showResetExpiryDates ? 1 : 0);
+                    key.SetValue("WidgetVisible", Visible ? 1 : 0);
                     key.SetValue("AnchorRight", _anchorRight);
                     key.SetValue("AnchorTop", _anchorTop);
                 }
