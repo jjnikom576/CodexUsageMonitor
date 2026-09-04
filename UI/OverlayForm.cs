@@ -2112,9 +2112,9 @@ namespace CodexUsageMonitor.UI
             using (var smallBrush = new SolidBrush(Color.FromArgb(166, 178, 190, 204)))
             using (var valueBrush = new SolidBrush(Color.White))
             {
-                DrawTrimmedText(g, title, valueFont, labelBrush, new Rectangle(x, y, 84, 18), StringAlignment.Near);
+                // Title text removed; lead the row with the period pill (5H / 7D) at the far left.
                 var pillWidth = Math.Max(34, Math.Min(70, (periodLabel.Length * 7) + 12));
-                var pillX = x + 88;
+                var pillX = x;
                 DrawMiniPill(g, smallFont, periodLabel, pillX, y + 1, pillWidth,
                     Color.FromArgb(hasPercent ? 55 : 34, accent), Color.FromArgb(hasPercent ? 150 : 90, accent));
                 g.DrawString(subtitle, smallFont, smallBrush, pillX + pillWidth + 8, y + 2);
@@ -2236,12 +2236,8 @@ namespace CodexUsageMonitor.UI
             if (window == null || window.LimitWindowSeconds <= 0)
                 return "LIVE";
 
-            var seconds = window.LimitWindowSeconds;
-            if (seconds == 24 * 60 * 60)
-                return "DAY";
-            if (seconds >= 6 * 24 * 60 * 60 && seconds <= 8 * 24 * 60 * 60)
-                return "WEEKLY";
-
+            // Badge the window by its length (5H, 7D, ...) to match the Claude column's pills
+            // instead of "DAY" / "WEEKLY".
             return FormatWindowLabel(window).ToUpperInvariant();
         }
 
@@ -2271,9 +2267,9 @@ namespace CodexUsageMonitor.UI
             using (var smallBrush = new SolidBrush(Color.FromArgb(166, 178, 190, 204)))
             using (var valueBrush = new SolidBrush(Color.White))
             {
-                DrawTrimmedText(g, title, valueFont, labelBrush, new Rectangle(x, y, 84, 18), StringAlignment.Near);
+                // Title text removed; lead the row with the period pill (5H / 7D) at the far left.
                 var pillWidth = Math.Max(34, Math.Min(70, (periodLabel.Length * 7) + 12));
-                var pillX = x + 88;
+                var pillX = x;
                 DrawMiniPill(g, smallFont, periodLabel, pillX, y + 1, pillWidth,
                     Color.FromArgb(hasData ? 55 : 34, accent), Color.FromArgb(hasData ? 150 : 90, accent));
                 g.DrawString(subtitle, smallFont, smallBrush, pillX + pillWidth + 8, y + 2);
